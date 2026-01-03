@@ -915,7 +915,7 @@ def render_competitive_analysis(data, filters):
         
         # Market shift prediction
         st.markdown("##### 🔮 Market Shift Simulation")
-        st.write("Enter expected price changes for each service:")
+        st.markdown("Enter expected price changes for each service (use whole numbers like **5.0** for 5%, or **-2.0** for a price drop):")
         
         price_changes = {}
         # Check if services are selected
@@ -934,39 +934,84 @@ def render_competitive_analysis(data, filters):
                     )
         
         if st.button("Predict Market Shift", key='predict_market'):
-            with st.spinner("Simulating market equilibrium..."):
-                market_shift = resonance_model.predict_market_shift(price_changes)
+            with st.spinner("Simulating selective market equilibrium..."):
+                # Pass selected services to focus simulation on the current set
+                target_services = filters['services'] if filters['services'] else list(data['companies']['name'].unique())
+                market_shift = resonance_model.predict_market_shift(price_changes, target_services=target_services)
                 
-                # Side-by-Side Comparison Chart
+                # PREMUIUM VISUALIZATION
                 services = list(market_shift['current_market_shares'].keys())
-                fig = go.Figure(data=[
-                    go.Bar(name='Current Share', 
-                          x=services, 
-                          y=[market_shift['current_market_shares'][s] for s in services],
-                          marker_color='rgba(158, 158, 158, 0.4)',
-                          marker_line_width=0),
-                    go.Bar(name='Projected Share', 
-                          x=services, 
-                          y=[market_shift['projected_market_shares'][s] for s in services],
-                          marker_color=[COMPANY_COLORS.get(s, '#A855F7') for s in services],
-                          marker_line_width=0)
-                ])
+                current_vals = [market_shift['current_market_shares'][s] for s in services]
+                proj_vals = [market_shift['projected_market_shares'][s] for s in services]
+                deltas = [proj_vals[i] - current_vals[i] for i in range(len(services))]
                 
+                fig = go.Figure()
+
+                # Add Current Share (Subtle Backing)
+                fig.add_trace(go.Bar(
+                    name='Current Share',
+                    x=services,
+                    y=current_vals,
+                    marker=dict(color='rgba(255, 255, 255, 0.05)', line=dict(color='rgba(255, 255, 255, 0.1)', width=1)),
+                    hovertemplate="%{x}: %{y:.1f}%<extra></extra>"
+                ))
+
+                # Add Projected Share (Dominant)
+                fig.add_trace(go.Bar(
+                    name='Projected Share',
+                    x=services,
+                    y=proj_vals,
+                    marker=dict(
+                        color=[COMPANY_COLORS.get(s, '#A855F7') for s in services],
+                        line=dict(width=0)
+                    ),
+                    hovertemplate="%{x}: %{y:.1f}%<extra></extra>"
+                ))
+
+                # Add Delta Labels
+                for i, s in enumerate(services):
+                    delta = deltas[i]
+                    color = "#39FF14" if delta > 0 else "#FF2E2E" if delta < 0 else "white"
+                    symbol = "▲" if delta > 0 else "▼" if delta < 0 else ""
+                    
+                    if abs(delta) > 0.01:
+                        fig.add_annotation(
+                            x=s,
+                            y=max(current_vals[i], proj_vals[i]) + 2,
+                            text=f"{symbol} {abs(delta):.1f}%",
+                            showarrow=False,
+                            font=dict(color=color, size=12, family="Outfit"),
+                            bgcolor="rgba(0,0,0,0.6)",
+                            bordercolor=color,
+                            borderwidth=1,
+                            borderpad=4
+                        )
+
                 # Add Market Exit (Fatigue) Annotation if significant
                 exit_pct = market_shift.get('market_exit_pct', 0)
                 if exit_pct > 0:
-                    st.markdown(kpi_card("Total Market Exit (Fatigue)", f"{exit_pct:.1f}%", "#FF2E2E", "🏃"), unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div style="background: rgba(255,46,46,0.1); border-left: 5px solid #FF2E2E; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 0.8rem; opacity: 0.8;">TOTAL MARKET EXIT (FATIGUE)</p>
+                        <h2 style="margin: 0; color: #FF2E2E; font-weight: 800;">🏃 {exit_pct:.1f}%</h2>
+                        <p style="margin: 5px 0 0 0; font-size: 0.75rem; opacity: 0.6;">Subscribers projected to opt-out of these selected services entirely.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 fig.update_layout(
-                    title="Equilibrium Shift: Market Share Redistribution",
-                    barmode='group',
-                    height=500,
-                    yaxis_title="Market Share (%)",
+                    title=dict(
+                        text="<b>Equilibrium Shift: Relative Market Share</b>",
+                        font=dict(size=20, family="Outfit")
+                    ),
+                    barmode='overlay', # Overlay looks more premium than group
+                    height=550,
+                    yaxis=dict(title="Relative Market Share (%)", gridcolor="rgba(255,255,255,0.05)", range=[0, max(current_vals + proj_vals) + 10]),
+                    xaxis=dict(title="", tickfont=dict(size=12)),
                     template='plotly_dark',
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(family="Outfit"),
-                    xaxis={'categoryorder':'total descending'}
+                    margin=dict(t=80, b=50, l=0, r=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -1299,11 +1344,11 @@ def render_customer_segmentation(data, filters):
                     with st.expander(f"{persona_name}: {strategy['strategy']}"):
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Monthly Impact", f"${strategy['monthly_impact_millions']:.1f}M")
+                            st.metric("Monthly Impact", f"${strategy.get('monthly_impact_millions', 0):.1f}M")
                         with col2:
-                            st.metric("Annual Impact", f"${strategy['annual_impact_millions']:.1f}M")
+                            st.metric("Annual Impact", f"${strategy.get('annual_impact_millions', 0):.1f}M")
                         with col3:
-                            st.metric("Affected Users", f"{strategy['affected_users_millions']:.1f}M")
+                            st.metric("Affected Users", f"{strategy.get('affected_users_millions', 0):.1f}M")
                 
                 # Recommendations
                 st.markdown("##### 🎯 Strategic Recommendations")

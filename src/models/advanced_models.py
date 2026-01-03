@@ -199,9 +199,10 @@ class CompetitiveResonanceModel:
             'category_resonance': 'High' if ce > 0.6 else 'Moderate' if ce > 0.3 else 'Low'
         }
         
-    def estimate_churn_diversion(self, service, price_increase_pct):
+    def estimate_churn_diversion(self, service, price_change_pct):
         """
         Estimate where churned users migrate using a gravity model based on cross-elasticity and share.
+        Handles both price increases (churn-out) and price decreases (churn-in/retention).
         """
         latest_date = self.subs['date'].max()
         srv_data = self.subs[(self.subs['date'] == latest_date) & (self.subs['service'] == service)]
@@ -210,10 +211,22 @@ class CompetitiveResonanceModel:
             return {'estimated_total_churn_pct': 0.0, 'total_subscribers_lost': 0.0, 'diversion_breakdown': {}}
         
         current_subs = float(srv_data['subscriber_count'].iloc[0])
-        
-        # Realism: Churn isn't just price_pct * PED. It has a baseline and accelerated tiers.
         ped = 1.4
-        churn_increase_pct = float(price_increase_pct) * ped * (1 + 0.02 * float(price_increase_pct))
+        
+        # If price drops, it's negative churn (retention uplift or customer acquisition)
+        if price_change_pct < 0:
+            # Positive impact on subscribers
+            impact_pct = abs(price_change_pct) * ped * 0.5 # 50% efficiency for acquisition vs churn
+            total_impact = current_subs * (impact_pct / 100.0)
+            
+            return {
+                'estimated_total_churn_pct': -round(float(impact_pct), 2),
+                'total_subscribers_lost': -round(float(total_impact), 0),
+                'diversion_breakdown': {'Market Attraction': {'churn_share_pct': 100.0, 'estimated_subscribers': total_impact, 'substitution_strength': 2.0}}
+            }
+        
+        # Normal churn logic for price increases
+        churn_increase_pct = float(price_change_pct) * ped * (1 + 0.02 * float(price_change_pct))
         total_lost = current_subs * (churn_increase_pct / 100.0)
         
         competitors = [c for c in self.subs['service'].unique() if c != service]
@@ -255,34 +268,57 @@ class CompetitiveResonanceModel:
             'diversion_breakdown': breakdown
         }
 
-    def predict_market_shift(self, price_changes):
+    def predict_market_shift(self, price_changes, target_services=None):
         """
         Predict final market shares after a series of concurrent price changes.
+        If target_services is provided, the simulation focuses only on that subset.
         """
         latest_date = self.subs['date'].max()
         current_data = self.subs[self.subs['date'] == latest_date]
         
-        shares = {row['service']: float(row['subscriber_count']) for _, row in current_data.iterrows()}
+        # Determine the universe of services for this simulation
+        universe = target_services if target_services else current_data['service'].unique()
+        
+        # Calculate current subcounts and shares for the universe
+        shares = {row['service']: float(row['subscriber_count']) for _, row in current_data.iterrows() if row['service'] in universe}
         total_vol = sum(shares.values()) or 1
+        
+        # current_pct is the share relative to the SELECTED group
         current_pct = {k: v/total_vol for k,v in shares.items()}
         projected_pct = current_pct.copy()
         
         # Realism: Process price changes and their cross-effects
         for source_srv, change in price_changes.items():
-            if change <= 0 or source_srv not in projected_pct: continue
+            if change == 0 or source_srv not in projected_pct: continue
             
-            # Calculate total loss for this service
-            diversion = self.estimate_churn_diversion(source_srv, change)
+            # Auto-scale decimals (e.g., 0.06 -> 6.0%) if all inputs are small
+            actual_change = change
+            if all(abs(v) < 1.0 for v in price_changes.values() if v != 0):
+                actual_change = change * 100.0
+                
+            # Calculate total impact for this service
+            diversion = self.estimate_churn_diversion(source_srv, actual_change)
             loss_rate = diversion['estimated_total_churn_pct'] / 100.0
-            total_loss_share = current_pct[source_srv] * loss_rate
             
-            # Deduct from source
-            projected_pct[source_srv] -= total_loss_share
+            total_impact_share = current_pct[source_srv] * loss_rate
+            projected_pct[source_srv] -= total_impact_share
             
-            # Distribute to others based on the diversion breakdown
-            for target_srv, stats in diversion['diversion_breakdown'].items():
-                if target_srv in projected_pct:
-                    projected_pct[target_srv] += total_loss_share * (stats['churn_share_pct'] / 100.0)
+            # Distribute gains/losses among the SELECTED UNIVERSE
+            # Filter diversion breakdown to only include selected target services
+            valid_targets = [t for t in diversion['diversion_breakdown'].keys() if t in projected_pct and t != source_srv]
+            
+            if not valid_targets:
+                # If no other selected services, the loss just goes to "Market Exit"
+                continue
+                
+            # Redistribute the non-market-exit portion to valid targets only
+            original_breakdown = diversion['diversion_breakdown']
+            total_valid_share = sum(original_breakdown[t]['churn_share_pct'] for t in valid_targets) or 1
+            
+            for target_srv in valid_targets:
+                # Re-normalize the diversion to the selected subset
+                relative_share_of_loss = original_breakdown[target_srv]['churn_share_pct'] / total_valid_share
+                projected_pct[target_srv] += total_impact_share * relative_share_of_loss * (1 - 0.15) # Assuming 15% exit
         
         # Final normalization (sum might be < 1 due to market exit)
         return {
@@ -365,7 +401,8 @@ class PsychographicSegmenter:
                 'strategy': strategy,
                 'monthly_impact_millions': round(float(impact), 2),
                 'annual_impact_millions': round(float(impact * 12), 2),
-                'at_risk_revenue_millions': round(float(at_risk_revenue), 2)
+                'at_risk_revenue_millions': round(float(at_risk_revenue), 2),
+                'affected_users_millions': round(float(segment_revenue * (p['churn_risk'] / 10.0) / current_arpu), 2)
             }
             
             if p['churn_risk'] > 6.5:
