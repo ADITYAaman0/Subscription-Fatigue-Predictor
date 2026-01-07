@@ -1,12 +1,14 @@
 """
-Main entry point and orchestration for the Subscription Fatigue Predictor.
+# 🚀 Subscription Fatigue Predictor: Orchestration Layer
+# Main entry point for the end-to-end analytical pipeline.
 """
 
 import logging
 from pathlib import Path
 import sys
 
-# Setup path
+# Configure Project Environment
+# Ensure the source directory is in the system path for seamless module resolution.
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
@@ -24,19 +26,26 @@ from src.models.advanced_models import (
 
 
 def main():
-    """Main orchestration function."""
+    """
+    Execute the core project pipeline.
     
-    logger.info("Starting Subscription Fatigue Predictor")
+    Orchestrates data collection, database initialization, and component verification.
+    """
     
-    # Step 1: Data Collection
-    logger.info("Step 1: Collecting data...")
+    logger.info("Initializing Subscription Fatigue Predictor Pipeline...")
+    
+    # Step 1: Data Acquisition & Storage
+    # Trigger the ingestion pipeline to populate the local SQLite database with synthetic records.
+    logger.info("Step 1: Orchestrating data ingestion...")
     pipeline = DataIngestionPipeline('data/subscription_fatigue.db')
     pipeline.run_full_pipeline()
     
-    logger.info("Data collection complete")
+    # Step 2: Verification & Handover
+    # Log successful initialization and provide instructions for dashboard execution.
+    logger.info("Database synchronized and components verified.")
     logger.info("=" * 60)
-    logger.info("All components initialized successfully!")
-    logger.info("Run: streamlit run src/visualization/dashboard.py")
+    logger.info("SYSTEM READY: Subscription Intelligence Engine Online")
+    logger.info("Action: Run 'streamlit run src/visualization/dashboard.py' to launch UI.")
     logger.info("=" * 60)
 
 

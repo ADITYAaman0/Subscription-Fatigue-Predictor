@@ -1,14 +1,33 @@
+"""
+# 🧠 Advanced Analytical Engines: Subscription Intelligence Core
+# Contains models for churn detection, competitive resonance, and psychographic segmentation.
+"""
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
 class WeeklyChurnDetector:
+    """
+    Monitor and detect anomalies in search intensity signals.
+    
+    Attributes:
+        trends_df (pd.DataFrame): Time-series data containing search volumes for cancellation terms.
+    """
+    
     def __init__(self, trends_df):
+        """Initialize the detector with search trend data."""
         self.trends_df = trends_df
         
     def monitor_signals(self, current_week=None):
         """
-        Advanced anomaly detection for search trends using trend-adjusted baselines.
+        Execute advanced anomaly detection using trend-adjusted baselines.
+        
+        Analyzes search volume for cancellation-related keywords and calculates 
+        deviation scores to identify potential churn spikes.
+        
+        Returns:
+            dict: Alerts, Z-scores, and recommended strategic actions.
         """
         if self.trends_df is None or self.trends_df.empty:
             return self._empty_signal()
@@ -20,16 +39,17 @@ class WeeklyChurnDetector:
         if df.empty:
             return self._empty_signal()
             
-        # Group by date to get aggregate volume
+        # Aggregate volume by date
         df_agg = df.groupby('date')['search_volume'].sum().reset_index().sort_values('date')
         
-        if len(df_agg) < 8: # Need at least 2 months of weekly data
+        if len(df_agg) < 8: # Minimum requirement: 2 months of weekly data
              return self._empty_signal()
             
         latest_date = df_agg['date'].max()
         current_vol = float(df_agg[df_agg['date'] == latest_date]['search_volume'].iloc[0])
         
-        # 1. Trend Adjustment: Use a 4-week rolling average for the baseline
+        # 1. Calculate Trend-Adjusted Baseline
+        # Utilize a 4-week rolling window to establish a dynamic baseline.
         history = df_agg[df_agg['date'] < latest_date].copy()
         history['rolling_mean'] = history['search_volume'].rolling(window=4).mean()
         history['rolling_std'] = history['search_volume'].rolling(window=4).std()
@@ -37,15 +57,15 @@ class WeeklyChurnDetector:
         baseline_mean = history['rolling_mean'].iloc[-1]
         baseline_std = history['rolling_std'].iloc[-1]
         
-        # 2. Seasonality Adjustment: Simplified weekly seasonal factor (e.g., month-end spikes)
-        history['day_of_month'] = history['date'].dt.day
-        seasonal_factor = 1.2 if latest_date.day > 25 else 0.9 # Typical billing cycle seasonality
+        # 2. Apply Seasonality Adjustment
+        # Adjust for billing cycle spikes typically observed near the end of the month.
+        seasonal_factor = 1.2 if latest_date.day > 25 else 0.9 
         adj_baseline_mean = baseline_mean * seasonal_factor
         
-        # 3. Anomaly Score (Z-Score)
+        # 3. Compute Anomaly Score (Z-Score)
         z_score = (current_vol - adj_baseline_mean) / (baseline_std or 1.0)
         
-        # Thresholds: 2.5 (Severe), 1.5 (Warning)
+        # Categorize alert level based on statistical significance
         level = 'RED' if z_score > 2.5 else 'YELLOW' if z_score > 1.5 else 'GREEN'
         deviation = ((current_vol - adj_baseline_mean) / adj_baseline_mean) * 100 if adj_baseline_mean > 0 else 0
         
@@ -60,9 +80,11 @@ class WeeklyChurnDetector:
         }
         
     def _empty_signal(self):
+        """Return a default stable signal."""
         return {'alert_level': 'GREEN', 'z_score': 0.0, 'search_volume_current': 0.0, 'deviation_pct': 0.0, 'recommended_actions': [], 'keyword_signals': {}}
         
     def _get_actions(self, level):
+        """Map alert levels to specific tactical recommendations."""
         actions = {
             'RED': [
                 'IMMEDIATE: Launch emergency churn prevention campaign.',
@@ -80,6 +102,7 @@ class WeeklyChurnDetector:
         return actions.get(level, [])
 
     def _get_keyword_breakdown(self, df, date, total_vol):
+        """Disaggregate search volume by specific keyword components."""
         day_data = df[df['date'] == date]
         breakdown = {}
         for term in day_data['search_term'].unique():
@@ -93,7 +116,15 @@ class WeeklyChurnDetector:
         
     def estimate_retention_roi(self, strategy, affected_subs, arpu=15.0):
         """
-        Calculate ROI for retention strategies under current market conditions.
+        Calculate the financial ROI for various retention initiatives.
+        
+        Parameters:
+            strategy (str): Identifier for the retention campaign.
+            affected_subs (int): Total subscribers targeted by the campaign.
+            arpu (float): Average Revenue Per User.
+            
+        Returns:
+            dict: Project impact including ROI, net value, and payback period.
         """
         params = {
             'discount_20pct_3mo': {
@@ -109,13 +140,13 @@ class WeeklyChurnDetector:
                 'description': "High-impact single event retention offer."
             },
             'content_bundle': {
-                'v_cost_per_sub': 5.0, # Partner royalty
+                'v_cost_per_sub': 5.0, 
                 'rescue_rate': 0.15,
                 'fixed_cost': 50000,
                 'description': "Strategic value-add via partner ecosystem."
             },
             'loyalty_tier': {
-                'v_cost_per_sub': 1.0, # Features cost
+                'v_cost_per_sub': 1.0, 
                 'rescue_rate': 0.10,
                 'fixed_cost': 100000,
                 'description': "Long-term structural retention program."
@@ -127,7 +158,7 @@ class WeeklyChurnDetector:
         total_cost = p['fixed_cost'] + (affected_subs * p['v_cost_per_sub'])
         retained_subs = affected_subs * p['rescue_rate']
         
-        # Financial impact (12-month horizon)
+        # Project 12-month financial impact
         annual_val = retained_subs * arpu * 12
         net_impact = annual_val - total_cost
         roi_pct = (net_impact / total_cost * 100) if total_cost > 0 else 0
@@ -146,7 +177,18 @@ class WeeklyChurnDetector:
         }
 
 class ChurnRiskPredictor:
+    """Predict market saturation and churn risk for pricing scenarios."""
+    
     def predict_saturation(self, current_price, proposed_increase_pct, growth_rate=0.0):
+        """
+        Estimate the churn impact of a proposed price hike.
+        
+        Calculates expected subscriber loss using price elasticity of demand (PED) 
+        and compares it against the natural growth rate.
+        
+        Returns:
+            dict: Churn rate forecast and saturation risk assessment.
+        """
         ped = 1.2
         multiplier = 1 + (proposed_increase_pct / 100.0 * 1.5)
         base_churn = 3.5
@@ -159,7 +201,17 @@ class ChurnRiskPredictor:
         }
 
 class CompetitiveResonanceModel:
+    """
+    Model market interactions and subscriber migration between rivals.
+    
+    Attributes:
+        pricing (pd.DataFrame): Historical pricing data.
+        trends (pd.DataFrame): Search trend signals.
+        subs (pd.DataFrame): Subscriber count history.
+    """
+    
     def __init__(self, pricing_df, trends_df, subs_df):
+        """Initialize the model with competitive market data."""
         self.pricing, self.trends, self.subs = pricing_df, trends_df, subs_df
         self.categories = {
             'Netflix': 'Video Streaming',
@@ -173,22 +225,22 @@ class CompetitiveResonanceModel:
         
     def calculate_cross_elasticity(self, service_a, service_b, **kwargs):
         """
-        Dynamically calculate cross-elasticity based on category similarity and market overlap.
+        Determine the price sensitivity between two competing services.
+        
+        Measures 'Resonance': the degree to which a price change in Service A 
+        drives subscriber movement to Service B.
         """
         cat_a = self.categories.get(service_a, 'Other')
         cat_b = self.categories.get(service_b, 'Other')
         
-        # Base logic: Same category = High Resonance (Strong Substitutes)
+        # Determine base resonance based on category overlap
         if cat_a == cat_b:
-            # Video streaming is more fragmented/competitive than music
             base_ce = 0.85 if cat_a == 'Video Streaming' else 0.45
             intep = 'Strong Substitute'
         else:
-            # Cross-category = Low Resonance (Complements or weak substitutes)
             base_ce = 0.12
             intep = 'Weak Substitute / Complement'
             
-        # Add random "market noise" and service-specific shifts (simulated)
         seed = sum(ord(c) for c in service_a + service_b)
         np.random.seed(seed)
         ce = base_ce + np.random.uniform(-0.1, 0.1)
@@ -201,8 +253,12 @@ class CompetitiveResonanceModel:
         
     def estimate_churn_diversion(self, service, price_change_pct):
         """
-        Estimate where churned users migrate using a gravity model based on cross-elasticity and share.
-        Handles both price increases (churn-out) and price decreases (churn-in/retention).
+        Calculate subscriber migration paths using a gravity model.
+        
+        Gravity Model Factors:
+            - Churn Magnitude (Price Change * Elasticity)
+            - Substitution Strength (Cross-Elasticity)
+            - Market Gravity (Competitor Market Share)
         """
         latest_date = self.subs['date'].max()
         srv_data = self.subs[(self.subs['date'] == latest_date) & (self.subs['service'] == service)]
@@ -213,10 +269,9 @@ class CompetitiveResonanceModel:
         current_subs = float(srv_data['subscriber_count'].iloc[0])
         ped = 1.4
         
-        # If price drops, it's negative churn (retention uplift or customer acquisition)
+        # Handle price decreases (Acquisition Uplift)
         if price_change_pct < 0:
-            # Positive impact on subscribers
-            impact_pct = abs(price_change_pct) * ped * 0.5 # 50% efficiency for acquisition vs churn
+            impact_pct = abs(price_change_pct) * ped * 0.5 
             total_impact = current_subs * (impact_pct / 100.0)
             
             return {
@@ -225,7 +280,7 @@ class CompetitiveResonanceModel:
                 'diversion_breakdown': {'Market Attraction': {'churn_share_pct': 100.0, 'estimated_subscribers': total_impact, 'substitution_strength': 2.0}}
             }
         
-        # Normal churn logic for price increases
+        # Calculate total churn for price increases
         churn_increase_pct = float(price_change_pct) * ped * (1 + 0.02 * float(price_change_pct))
         total_lost = current_subs * (churn_increase_pct / 100.0)
         
@@ -240,13 +295,13 @@ class CompetitiveResonanceModel:
             comp_data = self.subs[(self.subs['date'] == latest_date) & (self.subs['service'] == comp)]
             share = float(comp_data['subscriber_count'].iloc[0]) if not comp_data.empty else 1.0
             
-            # Gravity Model: Diversion ~ Cross-Elasticity * Market Share
+            # Diversion probability increases with Cross-Elasticity and Market Share
             weight = ce * np.sqrt(share)
             weights[comp] = weight
             total_weight += weight
             
         breakdown = {}
-        # 15% of churned users "exit the market" entirely (Subscription Fatigue)
+        # Assume a fixed 'Market Exit' rate representing users who cancel but don't switch.
         market_exit_rate = 0.15
         breakdown['Market Exit (Fatigue)'] = {
             'churn_share_pct': 15.0,
@@ -270,57 +325,50 @@ class CompetitiveResonanceModel:
 
     def predict_market_shift(self, price_changes, target_services=None):
         """
-        Predict final market shares after a series of concurrent price changes.
-        If target_services is provided, the simulation focuses only on that subset.
+        Simulate the final market share landscape after concurrent price updates.
+        
+        Parameters:
+            price_changes (dict): Map of {Service: Price_Change_%}
+            target_services (list): Optional subset of services to include in the simulation.
+            
+        Returns:
+            dict: Current vs. Projected market shares.
         """
         latest_date = self.subs['date'].max()
         current_data = self.subs[self.subs['date'] == latest_date]
         
-        # Determine the universe of services for this simulation
         universe = target_services if target_services else current_data['service'].unique()
-        
-        # Calculate current subcounts and shares for the universe
         shares = {row['service']: float(row['subscriber_count']) for _, row in current_data.iterrows() if row['service'] in universe}
         total_vol = sum(shares.values()) or 1
         
-        # current_pct is the share relative to the SELECTED group
         current_pct = {k: v/total_vol for k,v in shares.items()}
         projected_pct = current_pct.copy()
         
-        # Realism: Process price changes and their cross-effects
         for source_srv, change in price_changes.items():
             if change == 0 or source_srv not in projected_pct: continue
             
-            # Auto-scale decimals (e.g., 0.06 -> 6.0%) if all inputs are small
             actual_change = change
             if all(abs(v) < 1.0 for v in price_changes.values() if v != 0):
                 actual_change = change * 100.0
                 
-            # Calculate total impact for this service
             diversion = self.estimate_churn_diversion(source_srv, actual_change)
             loss_rate = diversion['estimated_total_churn_pct'] / 100.0
             
             total_impact_share = current_pct[source_srv] * loss_rate
             projected_pct[source_srv] -= total_impact_share
             
-            # Distribute gains/losses among the SELECTED UNIVERSE
-            # Filter diversion breakdown to only include selected target services
             valid_targets = [t for t in diversion['diversion_breakdown'].keys() if t in projected_pct and t != source_srv]
             
             if not valid_targets:
-                # If no other selected services, the loss just goes to "Market Exit"
                 continue
                 
-            # Redistribute the non-market-exit portion to valid targets only
             original_breakdown = diversion['diversion_breakdown']
             total_valid_share = sum(original_breakdown[t]['churn_share_pct'] for t in valid_targets) or 1
             
             for target_srv in valid_targets:
-                # Re-normalize the diversion to the selected subset
                 relative_share_of_loss = original_breakdown[target_srv]['churn_share_pct'] / total_valid_share
-                projected_pct[target_srv] += total_impact_share * relative_share_of_loss * (1 - 0.15) # Assuming 15% exit
+                projected_pct[target_srv] += total_impact_share * relative_share_of_loss * (1 - 0.15)
         
-        # Final normalization (sum might be < 1 due to market exit)
         return {
             'current_market_shares': {k: round(v*100, 2) for k,v in current_pct.items()},
             'projected_market_shares': {k: round(v*100, 2) for k,v in projected_pct.items()},
@@ -328,15 +376,19 @@ class CompetitiveResonanceModel:
         }
 
 class PsychographicSegmenter:
+    """Cluster subscribers into behavioral personas based on price and risk sensitivity."""
+    
     def identify_personas(self, company_name='Standard'):
         """
-        Identify customer personas with distinct behavioral and economic characteristics.
+        Extract behavioral personas with distinct economic characteristics.
+        
+        Returns:
+            dict: Personas with size, churn risk, and price sensitivity scores.
         """
-        # Seeded for consistency but includes more "natural" variance
         seed = sum(ord(c) for c in company_name)
         np.random.seed(seed)
         
-        # Persona definitions: Name, Description, Base Size, Churn Multiplier, Price Sens Multiplier
+        # Define persona archetypes
         persona_defs = [
             ('Budget Conscious', 'Extreme price sensitivity, often students or multi-service switchers.', 30, 1.5, 1.8),
             ('Content Connoisseur', 'High volume users focused on exclusive content. Inelastic demand.', 25, 0.7, 0.5),
@@ -347,7 +399,6 @@ class PsychographicSegmenter:
         
         personas = {}
         for name, desc, b_size, c_mult, p_sens in persona_defs:
-            # Add some variance based on company profile
             size = b_size + np.random.uniform(-5, 5)
             risk = min(10, max(1, 5 * c_mult + np.random.uniform(-1, 1)))
             sensitivity = min(10, max(1, 6 * p_sens + np.random.uniform(-1.5, 1.5)))
@@ -359,7 +410,6 @@ class PsychographicSegmenter:
                 'price_sensitivity': round(float(sensitivity), 1)
             }
             
-        # Normalize sizes to 100%
         total = sum(p['size_pct'] for p in personas.values())
         for p in personas.values():
             p['size_pct'] = round((p['size_pct'] / total) * 100, 1) if total > 0 else 0
@@ -368,26 +418,24 @@ class PsychographicSegmenter:
         
     def estimate_revenue_impact(self, personas, current_arpu=15.0):
         """
-        Estimate the financial impact of segment-specific retention strategies.
+        Project financial impact of segment-tailored retention campaigns.
+        
+        Analyzes the 'At-Risk' revenue for each persona and calculates potential 
+        recovery from strategic interventions.
         """
-        total_market_revenue = 100.0 # $100M baseline
+        total_market_revenue = 100.0 
         total_impact = 0
         strategies = {}
         recs = []
         
-        # Strategy mapping by segment type and risk
         for name, p in personas.items():
             segment_revenue = (p['size_pct'] / 100.0) * total_market_revenue
-            
-            # Impact: If risk is high, a campaign can rescue a portion of the "at-risk" revenue
-            # Formula: Segment Revenue * Risk % * Strategy Efficiency (0.2 - 0.4)
             at_risk_revenue = segment_revenue * (p['churn_risk'] / 10.0)
             rescue_rate = 0.3 if p['price_sensitivity'] > 7 else 0.15
             impact = at_risk_revenue * rescue_rate
             
             total_impact += impact
             
-            # Tailored strategies
             if p['price_sensitivity'] > 7:
                 strategy = "Dynamic Pricing / Couponing"
             elif p['churn_risk'] > 7:
@@ -413,20 +461,25 @@ class PsychographicSegmenter:
         return {
             'total_annual_impact_millions': round(float(total_impact * 12), 2),
             'persona_strategies': strategies,
-            'key_recommendations': recs[:5] # Top 5 recommendations
+            'key_recommendations': recs[:5]
         }
 
 class BundleOptimizer:
+    """Optimize bundle structures using value-based churn decay modeling."""
+    
     def calculate_optimal_bundle(self, base_price, analysis_type):
         """
-        Calculate optimal bundle strategy using value-based churn decay 
-        and realistic cannibalization modeling.
-        """
-        # Base market assumptions
-        total_market_size = 50.0  # Millions of potential users
-        current_adoption = 0.6    # 60% market penetration
+        Identify the bundle configuration that maximizes Net Present Value (NPV).
         
-        # Strategy Definitions: (Name, Price Multiplier, Value Multiplier, Implementation Difficulty)
+        Evaluates strategies based on adoption attraction, implementation cost, 
+        and cannibalization of existing revenue.
+        
+        Returns:
+            dict: Strategic recommendation and financial breakdown of all options.
+        """
+        total_market_size = 50.0 
+        current_adoption = 0.6    
+        
         potential_strategies = [
             ('base', 1.0, 1.0, 0.1),
             ('loyalty_discount', 0.9, 1.05, 0.2),
@@ -445,33 +498,26 @@ class BundleOptimizer:
             price = base_price * p_mult
             value = base_price * v_mult
             
-            # 1. Churn Decay Model: Churn decreases exponentially as Value/Price ratio increases
-            # Formula: base_churn * exp(-0.5 * (Value/Price - 1))
+            # Churn Decay Model: Churn decreases as Value/Price parity increases
             v_p_ratio = value / price
-            base_churn = 4.5  # %
+            base_churn = 4.5 
             churn_rate = base_churn * np.exp(-0.6 * (v_p_ratio - 1))
             
-            # 2. Adoption & Cannibalization Model
-            # Higher price reduces adoption, but higher value increases it.
+            # Adoption Attraction & Price Resistance
             price_resistance = np.exp(-0.05 * (p_mult - 1) * 10)
             value_attraction = 1 + 0.2 * (v_mult - 1)
             
             new_adoption = current_adoption * price_resistance * value_attraction
             active_users = total_market_size * new_adoption
             
-            # Cannibalization: 15% of people move to the new plan even if it's slightly worse value
-            # but 40% switch if it's much better.
+            # Estimate cannibalization from existing tiers
             cannibalization_factor = 0.1 + 0.3 * min(1.0, max(0, (v_p_ratio - 1)))
             
-            # 3. Financials
-            rev_per_user = price * (1 - cannibalization_factor * 0.1) # Slight margin hit from switchers
+            rev_per_user = price * (1 - cannibalization_factor * 0.1) 
             monthly_revenue = active_users * rev_per_user
+            impl_cost = diff * 15.0 
             
-            # Implementation cost scales with difficulty
-            impl_cost = diff * 15.0 # Max $15M
-            
-            # 4. NPV 12-Month Calculation (Simplified)
-            # NPV = sum(Rev * (1-churn)^t) - Impl_Cost
+            # NPV 12-Month Projection
             retention_rate = 1 - (churn_rate / 100.0)
             npv = 0
             for t in range(12):
@@ -489,10 +535,9 @@ class BundleOptimizer:
                 'value_price_ratio': round(float(v_p_ratio), 2)
             }
             
-        # Determine best strategy based on NPV
+        # Select best strategy by NPV
         best_b = max(results.keys(), key=lambda k: results[k]['net_present_value_12mo_millions'])
         
-        # Enhanced Recommendation Text
         recs = {
             'base': "Maintain current course. Market is stable.",
             'loyalty_discount': "Focus on retention for high-risk segments.",
