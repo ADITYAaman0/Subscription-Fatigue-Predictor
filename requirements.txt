@@ -1,47 +1,46 @@
 # 💰 Subscription Fatigue Predictor - Deployment Requirements
 
 # Core UI & Visualization
-streamlit>=1.28.0
-plotly>=5.17.0
+streamlit
+plotly
 
 # Data Science Stack (Pinned for stability)
-numpy<2.0.0
-pandas>=2.0.0
-scipy>=1.11.0
-scikit-learn>=1.3.0
+numpy
+pandas
+scipy
+scikit-learn
 
 # Machine Learning
-xgboost>=2.0.0
+xgboost
 # econml is heavy; loosening pin to allow pre-built wheels
 econml
 
-# Bayesian Inference (A/B Testing)
-pymc>=5.10.0
-arviz>=0.17.0
+
 
 # Statistical Analysis
-statsmodels>=0.14.0
-ruptures>=1.1.8
+statsmodels
+ruptures
 
 # Database & Infrastructure
-sqlalchemy>=2.0.0
-python-dotenv>=1.0.0
+sqlalchemy
+python-dotenv
 
 # Data Collection (Backend)
-pytrends>=4.9.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-yfinance>=0.2.31
-pandas-datareader>=0.10.0
+pytrends
+requests
+beautifulsoup4
+yfinance
+pandas-datareader
 
 # Jupyter Notebook Support
-jupyter>=1.0.0
-notebook>=7.0.0
-nbformat>=5.9.0
-nbconvert>=7.0.0
-ipykernel>=6.25.0
+jupyter
+notebook
+nbformat
+nbconvert
+ipykernel
 
 # Testing Extensions
-pytest>=7.4.0
-pytest-timeout>=2.2.0
-kaggle>=1.5.16
+pytest
+pytest-timeout
+kaggle
+
