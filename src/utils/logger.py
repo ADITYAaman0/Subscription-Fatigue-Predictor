@@ -5,7 +5,7 @@ Logging configuration for the project.
 import logging
 import sys
 from pathlib import Path
-from config import LOG_LEVEL, LOG_FILE
+from src.utils.config import LOG_LEVEL, LOG_FILE
 
 # Create logs directory if it doesn't exist
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)

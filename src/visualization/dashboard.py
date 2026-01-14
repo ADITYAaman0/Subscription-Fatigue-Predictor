@@ -33,6 +33,11 @@ try:
         PsychographicSegmenter,
         BundleOptimizer
     )
+    # Import new analytics dashboard components
+    from src.visualization.analytics_dashboard import (
+        render_content_value_tab,
+        ANALYTICS_AVAILABLE
+    )
 except ImportError as e:
     st.warning(f"Some modules not available: {e}")
     # Create dummy classes for missing imports
@@ -51,6 +56,13 @@ except ImportError as e:
     HeterogeneousEffectAnalyzer = DummyModel
     BertrandCompetitionModel = DummyModel
     ConsumerSurplusAnalyzer = DummyModel
+    ANALYTICS_AVAILABLE = False
+    
+    def render_content_value_tab(): st.info("Content Value module not available")
+    def render_attribution_tab(): st.info("Attribution module not available")
+    def render_ab_testing_tab(): st.info("A/B Testing module not available")
+    def render_network_effects_tab(): st.info("Network Effects module not available")
+    def render_regulatory_tab(): st.info("Regulatory Simulation module not available")
 
 # Page configuration
 st.set_page_config(
@@ -237,7 +249,6 @@ def diversion_card(label, value, color, icon):
 # Company Icons Mapping
 COMPANY_ICONS = {
     'Netflix': '🎬',
-    'Spotify': '🎧',
     'Disney Plus': '🏰',
     'HBO Max': '📺',
     'Amazon Prime': '📦'
@@ -246,7 +257,6 @@ COMPANY_ICONS = {
 # Company Color Mapping
 COMPANY_COLORS = {
     'Netflix': '#E50914',      # Red
-    'Spotify': '#1DB954',      # Green
     'Disney Plus': '#113CCF',  # Royal Blue
     'HBO Max': '#5822b4',      # Purple
     'Amazon Prime': '#00A8E1'  # Light Blue
@@ -260,43 +270,276 @@ COMPANY_COLORS = {
 def load_and_prepare_data():
     """Load and prepare all data for the dashboard."""
     try:
-        # Try to connect to database
-        db_path = project_root / 'data' / 'subscription_fatigue_UNUSED.db'
+        # Prefer deployment database for cloud environments (smaller, optimized)
+        deploy_db_path = project_root / 'data' / 'subscription_fatigue_deployed.db'
+        main_db_path = project_root / 'data' / 'subscription_fatigue.db'
         
-        if db_path.exists():
+        # Use deployment DB if it exists, otherwise fall back to main DB
+        if deploy_db_path.exists():
+            db_path = deploy_db_path
+        elif main_db_path.exists():
+            db_path = main_db_path
+        else:
+            db_path = None
+        
+        if db_path and db_path.exists():
             conn = sqlite3.connect(str(db_path))
+
             
-            # Load data
-            companies = pd.read_sql("SELECT * FROM companies", conn)
-            pricing = pd.read_sql("SELECT * FROM pricing_history", conn)
-            metrics = pd.read_sql("SELECT * FROM subscriber_metrics", conn)
-            trends = pd.read_sql("SELECT * FROM search_trends", conn)
+            # Load data individually for robustness
+            def safe_read(query, conn):
+                try:
+                    return pd.read_sql(query, conn)
+                except Exception:
+                    return pd.DataFrame()
+
+            def hybrid_merge(real_df, syn_df, join_cols, date_col='date'):
+                """Prioritize real, fill gaps with synthetic."""
+                if real_df.empty: return syn_df
+                if syn_df.empty: return real_df
+                
+                # Standardize company_id for both
+                for df in [real_df, syn_df]:
+                    if 'company_id' in df.columns:
+                        df['company_id'] = pd.to_numeric(df['company_id'], errors='coerce').fillna(0).astype(int)
+                    if date_col in df.columns:
+                        df[date_col] = pd.to_datetime(df[date_col])
+                
+                combined = pd.concat([real_df, syn_df], ignore_index=True)
+                # Drop duplicates keeping Real (assuming real is first)
+                return combined.drop_duplicates(subset=join_cols, keep='first')
+
+            companies = safe_read("SELECT * FROM companies WHERE company_id != 2", conn)
+            
+            # 1. PRICING HYBRID
+            real_pricing = safe_read("SELECT * FROM real_pricing_history WHERE company_id != 2", conn)
+            if 'date' in real_pricing.columns: real_pricing = real_pricing.rename(columns={'date': 'effective_date'})
+            syn_pricing = safe_read("SELECT * FROM pricing_history WHERE company_id != 2", conn)
+            pricing = hybrid_merge(real_pricing, syn_pricing, ['company_id', 'effective_date'], 'effective_date')
+            
+            # Filter by date
+            if not pricing.empty:
+                pricing = pricing[pricing['effective_date'] >= '2020-01-01']
+
+            # 2. METRICS HYBRID
+            # Netflix Real
+            real_netflix = safe_read("SELECT * FROM kaggle_netflix_subscribers", conn)
+            if not real_netflix.empty:
+                real_netflix['company_id'] = 1 # Force Netflix ID
+                # Align columns: Date, Subscribers
+                if 'Time Period' in real_netflix.columns:
+                    real_netflix = real_netflix.rename(columns={'Time Period': 'date', 'Subscribers': 'subscriber_count'})
+            
+            # Global Streaming (Competitors)
+            real_global = safe_read("SELECT * FROM real_global_streaming", conn)
+            if real_global.empty:
+                # Smart Discover any table with 'global' and 'streaming' in it
+                try:
+                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%global%streaming%'", conn)
+                    if not tables_df.empty:
+                        real_global = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
+                except: pass
+            
+            # Map Global Streaming to company_ids if found
+            real_competitor_metrics = pd.DataFrame()
+            if not real_global.empty:
+                # Mapping logic for common global streaming formats
+                # e.g., 'Service', 'Subscriber Count', etc.
+                service_col = next((c for c in real_global.columns if any(x in c.lower() for x in ['service', 'platform', 'name'])), None)
+                sub_col = next((c for c in real_global.columns if any(x in c.lower() for x in ['subs', 'count', 'total'])), None)
+                
+                if service_col and sub_col:
+                    m = {
+                        'Disney+': 3, 'Disney Plus': 3,
+                        'Prime Video': 5, 'Amazon Prime': 5,
+                        'HBO': 4, 'HBO Max': 4,
+                        'Spotify': 2
+                    }
+                    real_global['company_id'] = real_global[service_col].map(m)
+                    real_competitor_metrics = real_global.dropna(subset=['company_id'])
+                    real_competitor_metrics = real_competitor_metrics[real_competitor_metrics['company_id'] != 2]
+                    # Align date if possible, otherwise use current
+                    date_col = next((c for c in real_competitor_metrics.columns if 'date' in c.lower() or 'time' in c.lower()), None)
+                    if not date_col:
+                        real_competitor_metrics['date'] = pd.Timestamp.now()
+                    else:
+                        real_competitor_metrics = real_competitor_metrics.rename(columns={date_col: 'date'})
+                    
+                    real_competitor_metrics = real_competitor_metrics.rename(columns={sub_col: 'subscriber_count'})
+            
+            syn_metrics = safe_read("SELECT * FROM subscriber_metrics WHERE company_id != 2", conn)
+            
+            # Combine all real metrics first
+            real_metrics_all = pd.concat([real_netflix, real_competitor_metrics], ignore_index=True)
+            metrics = hybrid_merge(real_metrics_all, syn_metrics, ['company_id', 'date'], 'date')
+            
+            # Filter metrics by date
+            if not metrics.empty:
+                metrics = metrics[metrics['date'] >= '2020-01-01']
+
+            # 3. TRENDS HYBRID (Search Trends)
+            syn_trends = safe_read("SELECT * FROM search_trends WHERE company_id != 2", conn)
+            # We don't have a reliable real_trends table yet, so we use synthetic for now
+            trends = syn_trends[syn_trends['date'] >= '2020-01-01'] if not syn_trends.empty else syn_trends
+
+            # 4. NEWS & PROVENANCE
+            news_data = safe_read("SELECT * FROM news_articles", conn)
+            provenance = safe_read("SELECT * FROM data_provenance", conn)
+            global_streaming = safe_read("SELECT * FROM real_global_streaming", conn)
+
+            # Cleanup and Types
+            for df in [pricing, metrics, companies]:
+                if 'company_id' in df.columns:
+                    df['company_id'] = pd.to_numeric(df['company_id'], errors='coerce').fillna(0).astype(int)
+                    pass  # Silently fail if merge doesn't work
+            
+            trends = safe_read("SELECT * FROM search_trends", conn)
+            kaggle_data = safe_read("SELECT * FROM real_world_churn_data", conn)
+            news_data = safe_read("SELECT * FROM news_articles", conn)
+            provenance = safe_read("SELECT * FROM data_provenance", conn)
+            
+            # 4. Real Psychographic Data (e-commerce behavior, spotify interactions)
+            # Check for aggregated metrics first (from deployment DB), then raw data
+            try:
+                # Try aggregated events table first (from data_optimizer.py)
+                ecommerce = safe_read("SELECT * FROM ecommerce_behavior_events", conn)
+                if ecommerce.empty:
+                    # Fallback to raw kaggle table
+                    ecommerce = safe_read("SELECT * FROM kaggle_ecommerce_behavior_metrics_csv", conn)
+                if ecommerce.empty:
+                    # Try generic pattern
+                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%ecommerce%'", conn)
+                    if not tables_df.empty:
+                         ecommerce = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
+            except:
+                ecommerce = pd.DataFrame()
+
+
+            try:
+                spotify = safe_read("SELECT * FROM kaggle_spotify_user_data_csv", conn)
+                if spotify.empty:
+                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%spotify%'", conn)
+                    if not tables_df.empty:
+                         spotify = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
+            except:
+                spotify = pd.DataFrame()
             
             conn.close()
+            
+            # If any are empty, fallback to sample data (only if synthetic also failed)
+            # We relax this check: if real is present on pricing/metrics, we use it.
+            if companies.empty: 
+                companies = generate_sample_companies() # Helper fallback
+            
+            if pricing.empty or metrics.empty:
+                st.info("Key data missing. Generating sample data.")
+                return (*generate_sample_data(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
             
             # Convert dates
             for df in [pricing, metrics, trends]:
                 for col in df.columns:
                     if 'date' in col.lower() or 'effective' in col.lower():
                         df[col] = pd.to_datetime(df[col])
-            
-            return pricing, metrics, trends, companies
+                        
+            return pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, spotify
             
     except Exception as e:
         st.warning(f"Database error: {e}. Using sample data.")
     
     # Generate sample data if database doesn't exist
-    return generate_sample_data()
+    return (*generate_sample_data(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+
+
+def render_data_health_sidebar(provenance_df: pd.DataFrame):
+    """
+    Render data health panel in sidebar showing real vs synthetic data usage.
+    
+    Args:
+        provenance_df: DataFrame from data_provenance table
+    """
+    st.sidebar.markdown("---")
+    st.sidebar.header("📊 Data Health")
+    
+    if provenance_df.empty:
+        st.sidebar.warning("No provenance data available")
+        st.sidebar.caption("Run the data pipeline to populate")
+        return
+    
+    # Calculate real vs synthetic percentages
+    source_counts = provenance_df['source_type'].value_counts()
+    total = source_counts.sum()
+    
+    # Treat everything except 'synthetic' as Real
+    synthetic_sources = source_counts.get('synthetic', 0)
+    real_sources = total - synthetic_sources
+    
+    real_pct = (real_sources / total * 100) if total > 0 else 0
+    synthetic_pct = (synthetic_sources / total * 100) if total > 0 else 0
+    
+    # Display metrics
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        color = "#39FF14" if real_pct >= 80 else ("#FFA500" if real_pct >= 50 else "#FF2E2E")
+        st.sidebar.markdown(f"""
+        <div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 10px; border-left: 3px solid {color};">
+            <p style="margin:0; font-size: 0.75rem; opacity: 0.7;">REAL DATA</p>
+            <p style="margin:0; font-size: 1.5rem; font-weight: bold; color: {color};">{real_pct:.0f}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.sidebar.markdown(f"""
+        <div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 10px; border-left: 3px solid #A855F7;">
+            <p style="margin:0; font-size: 0.75rem; opacity: 0.7;">SYNTHETIC</p>
+            <p style="margin:0; font-size: 1.5rem; font-weight: bold; color: #A855F7;">{synthetic_pct:.0f}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Last refresh time
+    if 'ingestion_timestamp' in provenance_df.columns:
+        try:
+            latest = pd.to_datetime(provenance_df['ingestion_timestamp']).max()
+            if pd.notna(latest):
+                time_ago = datetime.now() - latest
+                if time_ago.days > 0:
+                    freshness = f"{time_ago.days}d ago"
+                    fresh_color = "#FF2E2E" if time_ago.days > 7 else "#FFAA00"
+                else:
+                    hours = time_ago.seconds // 3600
+                    freshness = f"{hours}h ago" if hours > 0 else "Just now"
+                    fresh_color = "#39FF14"
+                
+                st.sidebar.markdown(f"""
+                <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+                    <p style="margin:0; font-size: 0.7rem; opacity: 0.6;">LAST REFRESH</p>
+                    <p style="margin:0; font-size: 1rem; color: {fresh_color};">{freshness}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception:
+            pass
+    
+    # Source breakdown expander
+    with st.sidebar.expander("📋 Source Details"):
+        for source_type in ['kaggle', 'web_scrape', 'synthetic']:
+            source_data = provenance_df[provenance_df['source_type'] == source_type]
+            if not source_data.empty:
+                icon = {"kaggle": "📦", "web_scrape": "🌐", "synthetic": "🔧"}.get(source_type, "📄")
+                st.markdown(f"**{icon} {source_type.title()}** ({len(source_data)} tables)")
+                for _, row in source_data.iterrows():
+                    table = row.get('table_name', 'Unknown')
+                    records = row.get('record_count', 0)
+                    st.caption(f"  • {table}: {records:,} records")
+
 
 def generate_sample_data():
     """Generate comprehensive sample data for demonstration."""
     # Companies
     companies = pd.DataFrame({
-        'company_id': [1, 2, 3, 4, 5],
-        'name': ['Netflix', 'Spotify', 'Disney Plus', 'HBO Max', 'Amazon Prime'],
-        'sector': ['Streaming', 'Music', 'Streaming', 'Streaming', 'Streaming'],
-        'country': ['US', 'US', 'US', 'US', 'US'],
-        'stock_symbol': ['NFLX', 'SPOT', 'DIS', 'WBD', 'AMZN']
+        'company_id': [1, 3, 4, 5],
+        'name': ['Netflix', 'Disney Plus', 'HBO Max', 'Amazon Prime'],
+        'sector': ['Streaming', 'Streaming', 'Streaming', 'Streaming'],
+        'country': ['US', 'US', 'US', 'US'],
+        'stock_symbol': ['NFLX', 'DIS', 'WBD', 'AMZN']
     })
     
     # Generate dates up to current month
@@ -309,7 +552,6 @@ def generate_sample_data():
     pricing_data = []
     base_prices = {
         1: 10.99,  # Netflix
-        2: 9.99,   # Spotify
         3: 7.99,   # Disney Plus
         4: 14.99,  # HBO Max
         5: 12.99   # Amazon Prime
@@ -345,7 +587,6 @@ def generate_sample_data():
     metrics_data = []
     base_subs = {
         1: 220_000_000,  # Netflix
-        2: 180_000_000,  # Spotify
         3: 110_000_000,  # Disney Plus
         4: 80_000_000,   # HBO Max
         5: 200_000_000   # Amazon Prime
@@ -377,7 +618,6 @@ def generate_sample_data():
     trends_data = []
     search_terms = {
         1: ['Cancel Netflix', 'Netflix price', 'Netflix expensive'],
-        2: ['Cancel Spotify', 'Spotify price', 'Spotify alternative'],
         3: ['Cancel Disney Plus', 'Disney Plus price'],
         4: ['Cancel HBO Max', 'HBO Max price'],
         5: ['Cancel Amazon Prime', 'Prime Video price']
@@ -410,19 +650,32 @@ def generate_sample_data():
     
     return pricing, metrics, trends, companies
 
-def prepare_data_for_models(pricing, metrics, trends, companies):
-    """Prepare data in formats needed by different models."""
+def prepare_data_for_models(pricing, metrics, trends, companies, news_data=None, global_streaming=None, ecommerce=None):
+    """Prepare data in formats needed by different models.
+    
+    Enhanced to include:
+    - news_data: For sentiment analysis and co-occurrence
+    - global_streaming: For competitor pricing and subscriber data
+    - ecommerce: For price sensitivity
+    """
     # Merge company names into dataframes
     pricing_named = pricing.merge(companies[['company_id', 'name']], on='company_id')
     metrics_named = metrics.merge(companies[['company_id', 'name']], on='company_id')
     trends_named = trends.merge(companies[['company_id', 'name']], on='company_id')
     
-    return {
+    result = {
         'pricing_named': pricing_named,
         'metrics_named': metrics_named,
         'trends_named': trends_named,
         'companies': companies
     }
+    
+    # Add optional real data sources
+    if news_data is not None: result['news_data'] = news_data
+    if global_streaming is not None: result['global_streaming'] = global_streaming
+    if ecommerce is not None: result['ecommerce'] = ecommerce
+    
+    return result
 
 # =============================================================================
 # SIDEBAR FILTERS
@@ -442,8 +695,14 @@ def create_sidebar(data):
     )
     
     # Date range - handle potential NaT values
-    min_date_val = data['pricing_named']['effective_date'].min()
-    max_date_val = data['pricing_named']['effective_date'].max()
+    if 'effective_date' in data['pricing_named'].columns:
+        data['pricing_named']['effective_date'] = pd.to_datetime(data['pricing_named']['effective_date'])
+        min_date_val = data['pricing_named']['effective_date'].min()
+        max_date_val = data['pricing_named']['effective_date'].max()
+    else:
+        # Fallback if column still missing
+        min_date_val = pd.NaT
+        max_date_val = pd.NaT
     
     # Handle NaT values with fallback dates
     if pd.isna(min_date_val):
@@ -536,11 +795,15 @@ def create_kpi_metrics(data, filters):
     
     m1, m2, m3, m4, m5 = st.columns(5)
 
-    total_subs = selected_metrics['subscriber_count'].sum()
-    avg_arpu = selected_metrics['arpu'].mean()
+    # Safe column access using reindexing
+    required_cols = ['subscriber_count', 'arpu', 'churn_rate', 'market_share']
+    metrics_safe = selected_metrics.reindex(columns=required_cols, fill_value=0)
+    
+    total_subs = metrics_safe['subscriber_count'].sum()
+    avg_arpu = metrics_safe['arpu'].mean()
     total_rev = total_subs * avg_arpu / 1e6
-    avg_churn = selected_metrics['churn_rate'].mean()
-    total_share = selected_metrics['market_share'].sum()
+    avg_churn = metrics_safe['churn_rate'].mean()
+    total_share = metrics_safe['market_share'].sum()
 
     with m1:
         st.markdown(kpi_card("Total Reach", f"{total_subs/1e6:.1f}M", "#00D1FF", "💎"), unsafe_allow_html=True)
@@ -579,9 +842,14 @@ def plot_pricing_comparison(data, filters):
         st.warning("No pricing data available for selected filters")
         return
     
-    # Create figure
-    fig = go.Figure()
+    # Ensure color mapping exists for all platforms
+    for s in filters['services']:
+        if s not in COMPANY_COLORS:
+            COMPANY_COLORS[s] = "#888888"
+        if s not in COMPANY_ICONS:
+            COMPANY_ICONS[s] = "📱"
     
+    fig = go.Figure()
     colors = px.colors.qualitative.Set2
     for idx, service in enumerate(filters['services']):
         service_data = filtered_pricing[filtered_pricing['name'] == service].sort_values('effective_date')
@@ -591,7 +859,7 @@ def plot_pricing_comparison(data, filters):
             y=service_data['price'],
             name=service,
             mode='lines+markers',
-            line=dict(width=3, color=colors[idx % len(colors)]),
+            line=dict(width=3, color=COMPANY_COLORS.get(service, colors[idx % len(colors)])),
             marker=dict(size=8),
             hovertemplate=f"{service}<br>Date: %{{x}}<br>Price: $%{{y:.2f}}<extra></extra>"
         ))
@@ -626,7 +894,11 @@ def plot_pricing_comparison(data, filters):
         st.metric("Avg Price Change", f"{price_changes:.1f}%")
     
     with col4:
-        increase_count = len(filtered_pricing[filtered_pricing['change_percentage'] > 0])
+        # Safe column access for change_percentage
+        if 'change_percentage' in filtered_pricing.columns:
+            increase_count = len(filtered_pricing[filtered_pricing['change_percentage'] > 0])
+        else:
+            increase_count = 0
         st.metric("Price Increases", f"{increase_count}")
 
 def plot_subscriber_dynamics(data, filters):
@@ -811,8 +1083,20 @@ def render_competitive_analysis(data, filters):
             columns={'name': 'service'}
         )
         
-        # Initialize model
-        resonance_model = CompetitiveResonanceModel(pricing_df, trends_df, subs_df)
+        # Guard for insufficient services
+        if len(filters['services']) < 2:
+            st.warning("Please select at least 2 services in the sidebar to perform competitive analysis.")
+            st.info("This model requires comparison between rivals to calculate resonance and subscriber migration.")
+            return
+
+        # Initialize model with news data for co-occurrence analysis
+        news_df_for_model = data.get('news_data', pd.DataFrame()) if 'news_data' in data else pd.DataFrame()
+        try:
+            # Try with news_df parameter (new version)
+            resonance_model = CompetitiveResonanceModel(pricing_df, trends_df, subs_df, news_df=news_df_for_model)
+        except TypeError:
+            # Fallback to old version without news_df
+            resonance_model = CompetitiveResonanceModel(pricing_df, trends_df, subs_df)
         
         # Cross-elasticity analysis
         st.markdown("##### 📈 Cross-Elasticity Analysis")
@@ -827,32 +1111,38 @@ def render_competitive_analysis(data, filters):
         if st.button("Calculate Cross-Elasticity", key='calc_elasticity'):
             with st.spinner("Analyzing competitive relationship..."):
                 # Call simplified cross-elasticity
-                result = resonance_model.calculate_cross_elasticity(service1, service2)
+                try:
+                    result = resonance_model.calculate_cross_elasticity(service1, service2)
+                except Exception as e:
+                    result = None
                 
-                # Display results with safety defaults
-                st.markdown(f"**Cross-Elasticity Coefficient:** {result.get('cross_elasticity', 0):.3f}")
-                st.markdown(f"**Interpretation:** {result.get('interpretation', 'Relationship not found')}")
-                st.markdown(f"**Statistical Significance:** {'✓' if result.get('statistically_significant', False) else '✗'}")
-                
-                # Visualize relationship
-                fig = go.Figure()
-                fig.add_trace(go.Indicator(
-                    mode="gauge+number",
-                    value=result['cross_elasticity'],
-                    title={'text': f"{service1} → {service2}"},
-                    domain={'x': [0, 1], 'y': [0, 1]},
-                    gauge={
-                        'axis': {'range': [-2, 2]},
-                        'bar': {'color': "darkblue"},
-                        'steps': [
-                            {'range': [-2, -0.5], 'color': "green"},
-                            {'range': [-0.5, 0.5], 'color': "yellow"},
-                            {'range': [0.5, 2], 'color': "red"}
-                        ]
-                    }
-                ))
-                fig.update_layout(height=300)
-                st.plotly_chart(fig, use_container_width=True)
+                if result is None:
+                    st.warning("Insufficient data to calculate cross-elasticity for these services.")
+                else:
+                    # Display results with safety defaults
+                    st.markdown(f"**Cross-Elasticity Coefficient:** {result.get('cross_elasticity', 0):.3f}")
+                    st.markdown(f"**Interpretation:** {result.get('interpretation', 'Relationship not found')}")
+                    st.markdown(f"**Statistical Significance:** {'✓' if result.get('statistically_significant', False) else '✗'}")
+                    
+                    # Visualize relationship
+                    fig = go.Figure()
+                    fig.add_trace(go.Indicator(
+                        mode="gauge+number",
+                        value=result.get('cross_elasticity', 0),
+                        title={'text': f"{service1} → {service2}"},
+                        domain={'x': [0, 1], 'y': [0, 1]},
+                        gauge={
+                            'axis': {'range': [-2, 2]},
+                            'bar': {'color': "darkblue"},
+                            'steps': [
+                                {'range': [-2, -0.5], 'color': "green"},
+                                {'range': [-0.5, 0.5], 'color': "yellow"},
+                                {'range': [0.5, 2], 'color': "red"}
+                            ]
+                        }
+                    ))
+                    fig.update_layout(height=300)
+                    st.plotly_chart(fig, use_container_width=True)
         
         # Churn diversion analysis
         st.markdown("##### 🎯 Churn Diversion Prediction")
@@ -864,21 +1154,27 @@ def render_competitive_analysis(data, filters):
         
         if st.button("Estimate Churn Diversion", key='estimate_diversion'):
             with st.spinner("Calculating churn diversion..."):
-                diversion = resonance_model.estimate_churn_diversion(diversion_service, price_increase)
+                try:
+                    diversion = resonance_model.estimate_churn_diversion(diversion_service, price_increase)
+                except:
+                    diversion = None
                 
-                # Display refined results
-                st.markdown("##### 💡 Diversion Analysis Insights")
-                
-                m1, m2, m3 = st.columns(3)
-                with m1:
-                    st.markdown(diversion_card("Churn Intensity", f"{diversion.get('estimated_total_churn_pct', 0):.1f}%", "#FF2E2E", "🚨"), unsafe_allow_html=True)
-                with m2:
-                    val = diversion.get('total_subscribers_lost', 0)
-                    st.markdown(diversion_card("Subs at Risk", f"{val/1e6:.1f}M", "#FFA500", "👥"), unsafe_allow_html=True)
-                with m3:
-                    val = diversion.get('total_subscribers_lost', 0)
-                    rev_loss = val * 15 * 12 / 1e6
-                    st.markdown(diversion_card("Annual Revenue Risk", f"${rev_loss:.1f}M", "#00D1FF", "💰"), unsafe_allow_html=True)
+                if diversion is None:
+                     st.warning("Unable to estimate diversion. Insufficient calibration data.")
+                else:
+                    # Display refined results
+                    st.markdown("##### 💡 Diversion Analysis Insights")
+                    
+                    m1, m2, m3 = st.columns(3)
+                    with m1:
+                        st.markdown(diversion_card("Churn Intensity", f"{diversion.get('estimated_total_churn_pct', 0):.1f}%", "#FF2E2E", "🚨"), unsafe_allow_html=True)
+                    with m2:
+                        val = diversion.get('total_subscribers_lost', 0)
+                        st.markdown(diversion_card("Subs at Risk", f"{val/1e6:.1f}M", "#FFA500", "👥"), unsafe_allow_html=True)
+                    with m3:
+                        val = diversion.get('total_subscribers_lost', 0)
+                        rev_loss = val * 15 * 12 / 1e6
+                        st.markdown(diversion_card("Annual Revenue Risk", f"${rev_loss:.1f}M", "#00D1FF", "💰"), unsafe_allow_html=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1020,9 +1316,12 @@ def render_competitive_analysis(data, filters):
                 
                 # Calculate Net Changes
                 changes = []
+                current_shares = market_shift.get('current_market_shares', {})
+                projected_shares = market_shift.get('projected_market_shares', {})
+                
                 for s in services:
-                    curr = market_shift['current_market_shares'][s]
-                    proj = market_shift['projected_market_shares'][s]
+                    curr = current_shares.get(s, 0)
+                    proj = projected_shares.get(s, 0)
                     changes.append({'service': s, 'change': (proj - curr) * 100})
                 
                 sorted_changes = sorted(changes, key=lambda x: x['change'], reverse=True)
@@ -1078,47 +1377,61 @@ def render_churn_detection(data, filters):
             with st.spinner("Monitoring churn signals..."):
                 signals = detector.monitor_signals(current_week=current_date)
                 
-                # Display alert
-                if signals['alert_level'] == 'RED':
-                    st.error(f"🚨 ALERT LEVEL: {signals['alert_level']}")
-                elif signals['alert_level'] == 'YELLOW':
-                    st.warning(f"⚠️ ALERT LEVEL: {signals['alert_level']}")
+                # Check if signals returned valid data
+                if signals is None or 'alert_level' not in signals:
+                    st.warning("Unable to analyze signals. Insufficient data.")
                 else:
-                    st.success(f"✅ ALERT LEVEL: {signals['alert_level']}")
-                
-                # Metrics
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Search Volume", f"{signals['search_volume_current']:.0f}")
-                with col2:
-                    st.metric("Deviation", f"{signals['deviation_pct']:.1f}%")
-                with col3:
-                    st.metric("Z-Score", f"{signals['z_score']:.2f}")
-                
-                # Recommended actions
-                st.markdown("##### 🎯 Recommended Actions")
-                for action in signals['recommended_actions']:
-                    st.markdown(f"- {action}")
-                
-                # Keyword analysis
-                if signals['keyword_signals']:
-                    st.markdown("##### 🔍 Keyword Analysis")
-                    keywords_df = pd.DataFrame([
-                        {'Keyword': k, 'Volume': v['volume'], 'Share': v['share_of_total']}
-                        for k, v in signals['keyword_signals'].items()
-                    ])
-                    st.dataframe(keywords_df.style.format({'Share': '{:.1f}%'}))
+                    # Display alert
+                    if signals.get('alert_level') == 'RED':
+                        st.error(f"🚨 ALERT LEVEL: {signals['alert_level']}")
+                    elif signals.get('alert_level') == 'YELLOW':
+                        st.warning(f"⚠️ ALERT LEVEL: {signals['alert_level']}")
+                    else:
+                        st.success(f"✅ ALERT LEVEL: {signals.get('alert_level', 'GREEN')}")
+                    
+                    # Metrics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Search Volume", f"{signals.get('search_volume_current', 0):.0f}")
+                    with col2:
+                        st.metric("Deviation", f"{signals.get('deviation_pct', 0):.1f}%")
+                    with col3:
+                        st.metric("Z-Score", f"{signals.get('z_score', 0):.2f}")
+                    
+                    # Recommended actions
+                    actions = signals.get('recommended_actions', [])
+                    if actions:
+                        st.markdown("##### 🎯 Recommended Actions")
+                        for action in actions:
+                            st.markdown(f"- {action}")
+                    
+                    # Keyword analysis
+                    keyword_signals = signals.get('keyword_signals', {})
+                    if keyword_signals:
+                        st.markdown("##### 🔍 Keyword Analysis")
+                        keywords_df = pd.DataFrame([
+                            {'Keyword': k, 'Volume': v.get('volume', 0), 'Share': v.get('share_of_total', 0)}
+                            for k, v in keyword_signals.items()
+                        ])
+                        st.dataframe(keywords_df.style.format({'Share': '{:.1f}%'}))
         
         # ROI Analysis
         st.markdown("##### 💰 Retention ROI Calculator")
         
         # Get company metrics for ROI defaults
-        company_metrics = data['metrics_named'][
+        company_metrics_all = data['metrics_named'][
             data['metrics_named']['name'] == selected_company
-        ].sort_values('date').iloc[-1]
+        ].sort_values('date')
         
-        current_subs = company_metrics['subscriber_count']
-        current_arpu = company_metrics['arpu']
+        if company_metrics_all.empty:
+            st.warning(f"No metrics data available for {selected_company} to perform ROI calculation.")
+            return
+            
+        company_metrics = company_metrics_all.iloc[-1]
+        
+        # Safe column access
+        current_subs = company_metrics.get('subscriber_count', 0)
+        current_arpu = company_metrics.get('arpu', 10.0)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -1147,23 +1460,29 @@ def render_churn_detection(data, filters):
         
         if st.button("Calculate ROI", key='calculate_roi'):
             with st.spinner("Calculating ROI..."):
-                roi = detector.estimate_retention_roi(strategy, affected_subs, arpu=current_arpu)
+                try:
+                    roi = detector.estimate_retention_roi(strategy, affected_subs, arpu=current_arpu)
+                except Exception:
+                    roi = None
                 
-                brand_color = COMPANY_COLORS.get(selected_company, '#A855F7')
+                if roi is None:
+                    st.warning("Unable to calculate ROI. Missing necessary financial metrics.")
+                else:
+                    brand_color = COMPANY_COLORS.get(selected_company, '#A855F7')
 
-                m1, m2, m3, m4 = st.columns(4)
-                with m1:
-                    st.markdown(kpi_card("Implementation Cost", f"${roi.get('total_cost', 0)/1e6:.1f}M", "#00D1FF", "⚙️"), unsafe_allow_html=True)
-                with m2:
-                    st.markdown(kpi_card("Retained Subs", f"{roi.get('subscribers_retained', 0)/1e6:.1f}M", "#39FF14", "👥"), unsafe_allow_html=True)
-                with m3:
-                    # Robust key check for net_annual_value
-                    nav = roi.get('net_annual_value', roi.get('annual_value_retained', 0))
-                    st.markdown(kpi_card("Net Annual Value", f"${nav/1e6:.1f}M", "#A855F7", "💰"), unsafe_allow_html=True)
-                with m4:
-                    st.markdown(kpi_card("ROI", f"{roi.get('roi_pct', 0):.0f}%", "#FF2E2E" if roi.get('roi_pct', 0) < 100 else "#39FF14", "📈"), unsafe_allow_html=True)
-                
-                st.info(f"💡 **Strategic Recommendation:** {roi.get('recommendation', 'N/A')} - {roi.get('description', 'No details available')}")
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.markdown(kpi_card("Implementation Cost", f"${roi.get('total_cost', 0)/1e6:.1f}M", "#00D1FF", "⚙️"), unsafe_allow_html=True)
+                    with m2:
+                        st.markdown(kpi_card("Retained Subs", f"{roi.get('subscribers_retained', 0)/1e6:.1f}M", "#39FF14", "👥"), unsafe_allow_html=True)
+                    with m3:
+                        # Robust key check for net_annual_value
+                        nav = roi.get('net_annual_value', roi.get('annual_value_retained', 0))
+                        st.markdown(kpi_card("Net Annual Value", f"${nav/1e6:.1f}M", "#A855F7", "💰"), unsafe_allow_html=True)
+                    with m4:
+                        st.markdown(kpi_card("ROI", f"{roi.get('roi_pct', 0):.0f}%", "#FF2E2E" if roi.get('roi_pct', 0) < 100 else "#39FF14", "📈"), unsafe_allow_html=True)
+                    
+                    st.info(f"💡 **Strategic Recommendation:** {roi.get('recommendation', 'N/A')} - {roi.get('description', 'No details available')}")
                     
         # ML Churn Prediction
         st.markdown("---")
@@ -1286,16 +1605,38 @@ def render_customer_segmentation(data, filters):
 
     try:
         # Initialize segmenter
-        segmenter = PsychographicSegmenter()
+        # Initialize segmenter with real data if available
+        segmenter = PsychographicSegmenter(
+            ecommerce_data=data.get('ecommerce'),
+            spotify_data=data.get('spotify')
+        )
         
         # Get personas
-        personas = segmenter.identify_personas(company_name=persona_filter)
-        impact_data = segmenter.estimate_revenue_impact(personas)
+        try:
+            personas = segmenter.identify_personas(company_name=persona_filter)
+        except Exception:
+            personas = {}
+        
+        # Validate personas data
+        if personas is None or not isinstance(personas, dict) or len(personas) == 0:
+            st.warning("Unable to generate customer personas. Please try again with diverse data.")
+            return
+            
+        try:
+            impact_data = segmenter.estimate_revenue_impact(personas)
+        except Exception:
+            impact_data = None
+        
+        if impact_data is None:
+            st.warning("Unable to calculate revenue impact.")
+            return
         
         # Display personas
         st.markdown("##### 🎭 Customer Personas")
         
-        cols = st.columns(len(personas))
+        num_personas = len(personas)
+        if num_personas > 0:
+            cols = st.columns(min(num_personas, 5))  # Cap at 5 columns
         persona_colors = ['#FF2E2E', '#00D1FF', '#39FF14', '#A855F7', '#FFFFFF']
         
         for idx, (persona_name, persona_data) in enumerate(personas.items()):
@@ -1392,111 +1733,121 @@ def render_bundle_optimization():
         
         if st.button("Optimize Bundle Strategy", key='optimize_bundle'):
             with st.spinner("Calculating optimal bundle configuration..."):
-                results = optimizer.calculate_optimal_bundle(base_price, analysis_type)
+                try:
+                    results = optimizer.calculate_optimal_bundle(base_price, analysis_type)
+                except Exception as e:
+                    results = None
                 
-                # Display optimal bundle
-                optimal = results['optimal_bundle_details']
-                st.success(f"🎯 Optimal Strategy: {results['optimal_bundle'].replace('_', ' ').title()}")
-                st.markdown(f"**Recommendation:** {results['recommendation']}")
-                
-                # Display comparison
-                st.markdown("##### 📊 Strategy Comparison")
-                
-                comparison_data = []
-                for bundle_name, analysis in results['bundle_analyses'].items():
-                    comparison_data.append({
-                        'Strategy': analysis['description'],
-                        'Monthly Revenue ($M)': analysis['monthly_revenue_new_millions'],
-                        'Churn Rate': analysis['churn_rate_new'],
-                        'NPV 12mo ($M)': analysis['net_present_value_12mo_millions'],
-                        'Payback (months)': analysis['payback_period_months']
-                    })
-                
-                df_comparison = pd.DataFrame(comparison_data)
-                st.dataframe(
-                    df_comparison.style.format({
-                        'Monthly Revenue ($M)': '${:.1f}M',
-                        'Churn Rate': '{:.2f}%',
-                        'NPV 12mo ($M)': '${:.1f}M',
-                        'Payback (months)': '{:.1f}'
-                    }).background_gradient(subset=['NPV 12mo ($M)'], cmap='RdYlGn'),
-                    use_container_width=True
-                )
-                
-                # Visual comparison: Subplots for Premium Insight
-                from plotly.subplots import make_subplots
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    subplot_titles=("Revenue & Churn Trade-off", "Strategic Matrix (NPV vs. Risk)"),
-                    vertical_spacing=0.2,
-                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-                )
-                
-                # Chart 1: Revenue (Bars) and Churn (Line)
-                fig.add_trace(
-                    go.Bar(name='Monthly Revenue ($M)', 
-                          x=df_comparison['Strategy'], 
-                          y=df_comparison['Monthly Revenue ($M)'],
-                          marker_color='#A855F7', opacity=0.8),
-                    row=1, col=1, secondary_y=False
-                )
-                
-                fig.add_trace(
-                    go.Scatter(name='Churn Rate (%)', 
-                              x=df_comparison['Strategy'], 
-                              y=df_comparison['Churn Rate'],
-                              mode='lines+markers', line=dict(color='#FF2E2E', width=3)),
-                    row=1, col=1, secondary_y=True
-                )
-                
-                # Chart 2: Bubble Chart (Strategic Matrix)
-                fig.add_trace(
-                    go.Scatter(
-                        x=df_comparison['Strategy'],
-                        y=df_comparison['NPV 12mo ($M)'],
-                        mode='markers+text',
-                        marker=dict(
-                            size=df_comparison['Monthly Revenue ($M)']/5,
-                            color=df_comparison['NPV 12mo ($M)'],
-                            colorscale='Plasma',
-                            showscale=False,
-                            line=dict(width=2, color='white')
-                        ),
-                        text=df_comparison['Strategy'],
-                        textposition="top center"
-                    ),
-                    row=2, col=1
-                )
-                
-                fig.update_layout(
-                    height=700,
-                    showlegend=True,
-                    template='plotly_dark',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    margin=dict(l=20, r=20, t=60, b=20),
-                    font=dict(family="Outfit")
-                )
-                
-                fig.update_yaxes(title_text="Monthly Revenue ($M)", secondary_y=False, row=1, col=1)
-                fig.update_yaxes(title_text="Churn Rate (%)", secondary_y=True, row=1, col=1)
-                fig.update_yaxes(title_text="Net Present Value ($M)", row=2, col=1)
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Detailed optimal bundle analysis
-                st.markdown("##### 📈 Optimal Bundle Details")
-                
-                m1, m2, m3, m4 = st.columns(4)
-                
-                with m1:
-                    st.markdown(kpi_card("Proj. Revenue", f"${optimal['monthly_revenue_new_millions']:.1f}M", "#A855F7", "💰"), unsafe_allow_html=True)
-                with m2:
-                    st.markdown(kpi_card("Revenue Change", f"{optimal['revenue_change_pct']:.1f}%", "#39FF14", "📈"), unsafe_allow_html=True)
-                with m3:
-                    st.markdown(kpi_card("Target Churn", f"{optimal['churn_rate_new']:.2f}%", "#FF2E2E", "📉"), unsafe_allow_html=True)
-                with m4:
-                    st.markdown(kpi_card("Impl. Cost", f"${optimal['implementation_cost_millions']:.1f}M", "#00D1FF", "🛠️"), unsafe_allow_html=True)
+                # Validate results
+                if results is None or 'optimal_bundle_details' not in results:
+                    st.error("Unable to calculate bundle optimization. Insufficient historical data for this scenario.")
+                else:
+                    # Display optimal bundle
+                    optimal = results.get('optimal_bundle_details', {})
+                    if optimal:
+                        st.success(f"🎯 Optimal Strategy: {results.get('optimal_bundle', 'Unknown').replace('_', ' ').title()}")
+                        st.markdown(f"**Recommendation:** {results.get('recommendation', 'N/A')}")
+                        
+                        # Display comparison
+                        st.markdown("##### 📊 Strategy Comparison")
+                        
+                        bundle_analyses = results.get('bundle_analyses', {})
+                        if bundle_analyses:
+                            comparison_data = []
+                            for bundle_name, analysis in bundle_analyses.items():
+                                comparison_data.append({
+                                    'Strategy': analysis.get('description', bundle_name),
+                                    'Monthly Revenue ($M)': analysis.get('monthly_revenue_new_millions', 0),
+                                    'Churn Rate': analysis.get('churn_rate_new', 0),
+                                    'NPV 12mo ($M)': analysis.get('net_present_value_12mo_millions', 0),
+                                    'Payback (months)': analysis.get('payback_period_months', 0)
+                                })
+                            
+                            df_comparison = pd.DataFrame(comparison_data)
+                            st.dataframe(
+                                df_comparison.style.format({
+                                    'Monthly Revenue ($M)': '${:.1f}M',
+                                    'Churn Rate': '{:.2f}%',
+                                    'NPV 12mo ($M)': '${:.1f}M',
+                                    'Payback (months)': '{:.1f}'
+                                }).background_gradient(subset=['NPV 12mo ($M)'], cmap='RdYlGn'),
+                                use_container_width=True
+                            )
+                            
+                            # Visual comparison: Subplots for Premium Insight
+                            from plotly.subplots import make_subplots
+                            fig = make_subplots(
+                                rows=2, cols=1,
+                                subplot_titles=("Revenue & Churn Trade-off", "Strategic Matrix (NPV vs. Risk)"),
+                                vertical_spacing=0.2,
+                                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                            )
+                            
+                            # Chart 1: Revenue (Bars) and Churn (Line)
+                            fig.add_trace(
+                                go.Bar(name='Monthly Revenue ($M)', 
+                                      x=df_comparison['Strategy'], 
+                                      y=df_comparison['Monthly Revenue ($M)'],
+                                      marker_color='#A855F7', opacity=0.8),
+                                row=1, col=1, secondary_y=False
+                            )
+                            
+                            fig.add_trace(
+                                go.Scatter(name='Churn Rate (%)', 
+                                          x=df_comparison['Strategy'], 
+                                          y=df_comparison['Churn Rate'],
+                                          mode='lines+markers', line=dict(color='#FF2E2E', width=3)),
+                                row=1, col=1, secondary_y=True
+                            )
+                            
+                            # Chart 2: Bubble Chart (Strategic Matrix)
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=df_comparison['Strategy'],
+                                    y=df_comparison['NPV 12mo ($M)'],
+                                    mode='markers+text',
+                                    marker=dict(
+                                        size=df_comparison['Monthly Revenue ($M)']/5,
+                                        color=df_comparison['NPV 12mo ($M)'],
+                                        colorscale='Plasma',
+                                        showscale=False,
+                                        line=dict(width=2, color='white')
+                                    ),
+                                    text=df_comparison['Strategy'],
+                                    textposition="top center"
+                                ),
+                                row=2, col=1
+                            )
+                            
+                            fig.update_layout(
+                                height=700,
+                                showlegend=True,
+                                template='plotly_dark',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                margin=dict(l=20, r=20, t=60, b=20),
+                                font=dict(family="Outfit")
+                            )
+                            
+                            fig.update_yaxes(title_text="Monthly Revenue ($M)", secondary_y=False, row=1, col=1)
+                            fig.update_yaxes(title_text="Churn Rate (%)", secondary_y=True, row=1, col=1)
+                            fig.update_yaxes(title_text="Net Present Value ($M)", row=2, col=1)
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Detailed optimal bundle analysis
+                            st.markdown("##### 📈 Optimal Bundle Details")
+                            
+                            m1, m2, m3, m4 = st.columns(4)
+                            
+                            with m1:
+                                st.markdown(kpi_card("Proj. Revenue", f"${optimal.get('monthly_revenue_new_millions', 0):.1f}M", "#A855F7", "💰"), unsafe_allow_html=True)
+                            with m2:
+                                st.markdown(kpi_card("Revenue Change", f"{optimal.get('revenue_change_pct', 0):.1f}%", "#39FF14", "📈"), unsafe_allow_html=True)
+                            with m3:
+                                st.markdown(kpi_card("Target Churn", f"{optimal.get('churn_rate_new', 0):.2f}%", "#FF2E2E", "📉"), unsafe_allow_html=True)
+                            with m4:
+                                st.markdown(kpi_card("Impl. Cost", f"${optimal.get('implementation_cost_millions', 0):.1f}M", "#00D1FF", "🛠️"), unsafe_allow_html=True)
     
     except Exception as e:
         st.error(f"Error in bundle optimization: {str(e)}")
@@ -1542,6 +1893,17 @@ def render_elasticity_analysis(data, filters):
                         window_months=6
                     )
                     
+                    # Validate results
+                    if results is None or results.empty:
+                        st.info(f"Insufficient data for {service} elasticity analysis.")
+                        continue
+                    
+                    # Check required columns exist
+                    required_cols = ['date', 'elasticity', 'price', 'is_elastic']
+                    if not all(col in results.columns for col in required_cols):
+                        st.warning(f"Missing data columns for {service}.")
+                        continue
+                    
                     # Plot
                     fig = make_subplots(specs=[[{"secondary_y": True}]])
                     
@@ -1576,24 +1938,139 @@ def render_elasticity_analysis(data, filters):
                     # Summary statistics
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        avg_elasticity = results['elasticity'].mean()
+                        avg_elasticity = results['elasticity'].mean() if len(results) > 0 else 0
                         st.metric("Avg Elasticity", f"{avg_elasticity:.2f}")
                     with col2:
-                        elastic_pct = (results['is_elastic'].sum() / len(results)) * 100
+                        elastic_pct = (results['is_elastic'].sum() / len(results)) * 100 if len(results) > 0 else 0
                         st.metric("Elastic Periods", f"{elastic_pct:.1f}%")
                     with col3:
-                        price_change = ((merged['price'].iloc[-1] - merged['price'].iloc[0]) / 
-                                       merged['price'].iloc[0]) * 100
+                        if len(merged) > 1:
+                            price_change = ((merged['price'].iloc[-1] - merged['price'].iloc[0]) / 
+                                           merged['price'].iloc[0]) * 100
+                        else:
+                            price_change = 0
                         st.metric("Price Change", f"{price_change:.1f}%")
                     with col4:
-                        sub_change = ((merged['subscriber_count'].iloc[-1] - merged['subscriber_count'].iloc[0]) / 
-                                     merged['subscriber_count'].iloc[0]) * 100
+                        if len(merged) > 1:
+                            sub_change = ((merged['subscriber_count'].iloc[-1] - merged['subscriber_count'].iloc[0]) / 
+                                         merged['subscriber_count'].iloc[0]) * 100
+                        else:
+                            sub_change = 0
                         st.metric("Subscriber Change", f"{sub_change:.1f}%")
                     
                     st.markdown("---")
+                else:
+                    st.info(f"Insufficient data points for {service}.")
+            else:
+                st.info(f"No pricing or metrics data available for {service}.")
     
     except Exception as e:
         st.error(f"Error in elasticity analysis: {str(e)}")
+
+# =============================================================================
+# KAGGLE REAL DATA TAB
+# =============================================================================
+
+def render_kaggle_data_tab(data):
+    """Render the Real Kaggle Data analysis tab."""
+    st.subheader("🌍 Real-World Customer Churn Analysis")
+    st.markdown("Analysis based on **Kaggle Telco Customer Churn** dataset with 7,043 real customers.")
+    
+    kaggle_df = data.get('kaggle_data', pd.DataFrame())
+    
+    if kaggle_df.empty:
+        st.warning("⚠️ Kaggle data not available. Please configure your Kaggle API credentials in .env and run setup.py")
+        st.code("""
+# Add to .env file:
+KAGGLE_USERNAME=your_username
+KAGGLE_KEY=your_api_key
+
+# Then run:
+python setup.py
+        """)
+        return
+    
+    # Dataset Overview
+    st.markdown("### 📊 Dataset Overview")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Customers", f"{len(kaggle_df):,}")
+    with col2:
+        st.metric("Features", f"{len(kaggle_df.columns)}")
+    with col3:
+        if 'Churn' in kaggle_df.columns:
+            churn_rate = (kaggle_df['Churn'] == 'Yes').mean() * 100
+            st.metric("Churn Rate", f"{churn_rate:.1f}%")
+        else:
+            st.metric("Churn Rate", "N/A")
+    with col4:
+        if 'Churn' in kaggle_df.columns:
+            churned = (kaggle_df['Churn'] == 'Yes').sum()
+            st.metric("Churned Customers", f"{churned:,}")
+        else:
+            st.metric("Churned Customers", "N/A")
+    
+    st.markdown("---")
+    
+    # Churn Distribution
+    if 'Churn' in kaggle_df.columns:
+        st.markdown("### 📉 Churn Distribution")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            churn_counts = kaggle_df['Churn'].value_counts()
+            fig = px.pie(
+                values=churn_counts.values,
+                names=churn_counts.index,
+                title="Customer Churn Distribution",
+                color_discrete_sequence=['#39FF14', '#FF2E2E'],
+                hole=0.4
+            )
+            fig.update_layout(template='plotly_dark')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Key insights
+            st.markdown("#### 🔑 Key Insights")
+            
+            if 'tenure' in kaggle_df.columns:
+                avg_tenure_churned = kaggle_df[kaggle_df['Churn'] == 'Yes']['tenure'].mean()
+                avg_tenure_retained = kaggle_df[kaggle_df['Churn'] == 'No']['tenure'].mean()
+                st.info(f"**Tenure Gap**: Churned customers avg {avg_tenure_churned:.1f} months vs Retained {avg_tenure_retained:.1f} months")
+            
+            if 'MonthlyCharges' in kaggle_df.columns:
+                avg_charges_churned = kaggle_df[kaggle_df['Churn'] == 'Yes']['MonthlyCharges'].mean()
+                avg_charges_retained = kaggle_df[kaggle_df['Churn'] == 'No']['MonthlyCharges'].mean()
+                st.warning(f"**Price Sensitivity**: Churned pay ${avg_charges_churned:.2f}/mo vs Retained ${avg_charges_retained:.2f}/mo")
+            
+            if 'Contract' in kaggle_df.columns:
+                monthly_churn = kaggle_df[kaggle_df['Contract'] == 'Month-to-month']['Churn'].value_counts(normalize=True).get('Yes', 0) * 100
+                st.error(f"**Contract Risk**: {monthly_churn:.1f}% of month-to-month customers churn")
+    
+    st.markdown("---")
+    
+    # Feature Analysis
+    st.markdown("### 📊 Feature Analysis")
+    
+    numeric_cols = kaggle_df.select_dtypes(include=[np.number]).columns.tolist()
+    if numeric_cols and 'Churn' in kaggle_df.columns:
+        selected_feature = st.selectbox("Select Feature to Analyze", numeric_cols)
+        
+        fig = px.box(
+            kaggle_df,
+            x='Churn',
+            y=selected_feature,
+            color='Churn',
+            color_discrete_map={'Yes': '#FF2E2E', 'No': '#39FF14'},
+            title=f"{selected_feature} Distribution by Churn Status"
+        )
+        fig.update_layout(template='plotly_dark')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Data Preview
+    st.markdown("### 📋 Data Preview")
+    st.dataframe(kaggle_df.head(100), use_container_width=True, hide_index=True)
 
 # =============================================================================
 # MAIN DASHBOARD
@@ -1604,8 +2081,16 @@ def main():
     
     # Load data
     with st.spinner("Loading data and preparing models..."):
-        pricing, metrics, trends, companies = load_and_prepare_data()
-        data = prepare_data_for_models(pricing, metrics, trends, companies)
+        pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, _ = load_and_prepare_data()
+        data = prepare_data_for_models(pricing, metrics, trends, companies, 
+                                     news_data=news_data, 
+                                     global_streaming=global_streaming,
+                                     ecommerce=ecommerce)
+        data['kaggle_data'] = kaggle_data  # Add Kaggle data to data dict
+        data['news_data'] = news_data       # Add news data
+        data['provenance'] = provenance     # Add provenance data
+        data['global_streaming'] = global_streaming  # Add global streaming data
+        data['ecommerce'] = ecommerce
     
     # Create header
     create_header()
@@ -1613,17 +2098,22 @@ def main():
     # Create sidebar filters
     filters = create_sidebar(data)
     
+    # Render data health panel in sidebar
+    render_data_health_sidebar(provenance)
+    
     # Show KPI metrics
     create_kpi_metrics(data, filters)
     
     # Main content with tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📈 Market Overview",
         "🔄 Competitive Analysis",
         "🚨 Churn Detection",
         "👥 Customer Segments",
         "📦 Bundle Optimization",
         "💹 Elasticity Analysis",
+        "📅 Content Value",
+        "🌍 Real Kaggle Data",
         "📊 Raw Data"
     ])
     
@@ -1648,6 +2138,13 @@ def main():
         render_elasticity_analysis(data, filters)
     
     with tab7:
+        render_content_value_tab()
+    
+    with tab8:
+        render_kaggle_data_tab(data)
+
+    
+    with tab9:
         st.subheader("📋 Raw Data Explorer")
         
         dataset = st.selectbox(

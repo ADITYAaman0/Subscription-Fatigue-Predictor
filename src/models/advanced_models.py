@@ -208,20 +208,61 @@ class CompetitiveResonanceModel:
         pricing (pd.DataFrame): Historical pricing data.
         trends (pd.DataFrame): Search trend signals.
         subs (pd.DataFrame): Subscriber count history.
+        news_df (pd.DataFrame): News articles with sentiment (optional).
     """
     
-    def __init__(self, pricing_df, trends_df, subs_df):
+    def __init__(self, pricing_df, trends_df, subs_df, news_df=None):
         """Initialize the model with competitive market data."""
         self.pricing, self.trends, self.subs = pricing_df, trends_df, subs_df
+        self.news_df = news_df if news_df is not None else pd.DataFrame()
         self.categories = {
             'Netflix': 'Video Streaming',
             'Disney Plus': 'Video Streaming',
             'HBO Max': 'Video Streaming',
-            'Hulu': 'Video Streaming',
-            'Spotify': 'Music Streaming',
-            'Apple Music': 'Music Streaming',
-            'Amazon Music': 'Music Streaming'
+            'Amazon Prime': 'Video Streaming',
+            'Spotify': 'Music Streaming'
         }
+        # Cache for co-occurrence matrix
+        self._cooccurrence_cache = {}
+        
+    def _calculate_news_cooccurrence(self, service_a, service_b):
+        """
+        Calculate how often two services appear together in negative sentiment articles.
+        
+        This measures real-world competitive tension and switching behavior.
+        Returns a weight between 0 and 1.
+        """
+        if self.news_df.empty:
+            return None
+        
+        # Normalize service names for matching
+        service_a_lower = service_a.lower()
+        service_b_lower = service_b.lower()
+        
+        # Find articles mentioning both services
+        mask_a = self.news_df['title'].str.lower().str.contains(service_a_lower, na=False) | \
+                 self.news_df['description'].str.lower().str.contains(service_a_lower, na=False)
+        mask_b = self.news_df['title'].str.lower().str.contains(service_b_lower, na=False) | \
+                 self.news_df['description'].str.lower().str.contains(service_b_lower, na=False)
+        
+        cooccurring = self.news_df[mask_a & mask_b]
+        
+        if len(cooccurring) == 0:
+            return None
+        
+        # Focus on negative sentiment articles (switching behavior)
+        negative_articles = cooccurring[cooccurring.get('sentiment_score', 0) < 0]
+        
+        # Calculate co-occurrence weight
+        # Higher weight = more competitive tension
+        total_articles = len(self.news_df)
+        cooccurrence_freq = len(cooccurring) / max(total_articles, 1)
+        negative_ratio = len(negative_articles) / max(len(cooccurring), 1)
+        
+        # Weight combines frequency and negative sentiment
+        weight = cooccurrence_freq * (1 + negative_ratio * 2)
+        
+        return min(1.0, weight * 10)  # Normalize to 0-1 range
         
     def calculate_cross_elasticity(self, service_a, service_b, **kwargs):
         """
@@ -229,6 +270,9 @@ class CompetitiveResonanceModel:
         
         Measures 'Resonance': the degree to which a price change in Service A 
         drives subscriber movement to Service B.
+        
+        Now enhanced with NewsAPI co-occurrence analysis to weight cross-elasticity
+        based on real-world competitive tension.
         """
         cat_a = self.categories.get(service_a, 'Other')
         cat_b = self.categories.get(service_b, 'Other')
@@ -240,15 +284,29 @@ class CompetitiveResonanceModel:
         else:
             base_ce = 0.12
             intep = 'Weak Substitute / Complement'
-            
-        seed = sum(ord(c) for c in service_a + service_b)
-        np.random.seed(seed)
-        ce = base_ce + np.random.uniform(-0.1, 0.1)
+        
+        # NEW: Adjust based on news co-occurrence
+        news_weight = self._calculate_news_cooccurrence(service_a, service_b)
+        if news_weight is not None:
+            # Boost cross-elasticity if services frequently appear together in negative news
+            # This indicates real competitive tension and switching behavior
+            adjustment = (news_weight - 0.5) * 0.3  # Scale adjustment
+            base_ce += adjustment
+            intep = f'{intep} (News-Weighted)'
+        else:
+            # Fallback to deterministic seed-based variation if no news data
+            seed = sum(ord(c) for c in service_a + service_b)
+            np.random.seed(seed)
+            base_ce += np.random.uniform(-0.1, 0.1)
+        
+        # Ensure cross-elasticity stays in reasonable bounds
+        ce = max(0.0, min(2.0, base_ce))
         
         return {
             'cross_elasticity': round(float(ce), 2),
             'interpretation': intep,
-            'category_resonance': 'High' if ce > 0.6 else 'Moderate' if ce > 0.3 else 'Low'
+            'category_resonance': 'High' if ce > 0.6 else 'Moderate' if ce > 0.3 else 'Low',
+            'news_weight': round(float(news_weight), 3) if news_weight is not None else None
         }
         
     def estimate_churn_diversion(self, service, price_change_pct):
@@ -376,11 +434,77 @@ class CompetitiveResonanceModel:
         }
 
 class PsychographicSegmenter:
-    """Cluster subscribers into behavioral personas based on price and risk sensitivity."""
+    """
+    Cluster subscribers into behavioral personas based on price and risk sensitivity.
+    
+    Enhanced to use real behavioral data from:
+    - ecommerce_behavior: Cart abandonment rates → price sensitivity
+    - spotify_data: User interaction patterns → engagement clusters
+    """
+    
+    def __init__(self, ecommerce_data=None, spotify_data=None):
+        """
+        Initialize with optional real behavioral data.
+        
+        Args:
+            ecommerce_data: DataFrame with cart abandonment or price sensitivity signals
+            spotify_data: DataFrame with user interaction/engagement patterns
+        """
+        self.ecommerce_data = ecommerce_data if ecommerce_data is not None else pd.DataFrame()
+        self.spotify_data = spotify_data if spotify_data is not None else pd.DataFrame()
+    
+    def _extract_price_sensitivity_from_ecommerce(self):
+        """
+        Extract price sensitivity signals from ecommerce behavior data.
+        
+        Uses cart abandonment rates as a proxy for price sensitivity.
+        Higher abandonment = higher price sensitivity.
+        """
+        if self.ecommerce_data.empty:
+            return None
+        
+        # If we have cart abandonment data, use it to infer price sensitivity
+        if 'event_type' in self.ecommerce_data.columns:
+            # Calculate abandonment rate (cart_add but no purchase)
+            cart_adds = len(self.ecommerce_data[self.ecommerce_data['event_type'] == 'cart'])
+            purchases = len(self.ecommerce_data[self.ecommerce_data['event_type'] == 'purchase'])
+            
+            if cart_adds > 0:
+                abandonment_rate = 1 - (purchases / cart_adds)
+                # Map abandonment rate to price sensitivity (0-10 scale)
+                price_sensitivity = min(10, abandonment_rate * 10)
+                return price_sensitivity
+        
+        return None
+    
+    def _extract_engagement_clusters_from_spotify(self):
+        """
+        Extract engagement patterns from Spotify data.
+        
+        Maps user interaction patterns to behavioral clusters.
+        """
+        if self.spotify_data.empty:
+            return None
+        
+        # If we have interaction data, cluster by engagement level
+        if 'streams' in self.spotify_data.columns or 'popularity' in self.spotify_data.columns:
+            # High engagement = lower churn risk
+            # Low engagement = higher churn risk
+            engagement_col = 'streams' if 'streams' in self.spotify_data.columns else 'popularity'
+            avg_engagement = self.spotify_data[engagement_col].mean()
+            
+            # Map to churn risk (inverse relationship)
+            if avg_engagement > 0:
+                churn_risk = max(1, 10 - (avg_engagement / 10))
+                return churn_risk
+        
+        return None
     
     def identify_personas(self, company_name='Standard'):
         """
         Extract behavioral personas with distinct economic characteristics.
+        
+        Enhanced to incorporate real behavioral data when available.
         
         Returns:
             dict: Personas with size, churn risk, and price sensitivity scores.
@@ -388,7 +512,11 @@ class PsychographicSegmenter:
         seed = sum(ord(c) for c in company_name)
         np.random.seed(seed)
         
-        # Define persona archetypes
+        # Try to extract real behavioral signals
+        real_price_sensitivity = self._extract_price_sensitivity_from_ecommerce()
+        real_churn_risk = self._extract_engagement_clusters_from_spotify()
+        
+        # Define persona archetypes with base values
         persona_defs = [
             ('Budget Conscious', 'Extreme price sensitivity, often students or multi-service switchers.', 30, 1.5, 1.8),
             ('Content Connoisseur', 'High volume users focused on exclusive content. Inelastic demand.', 25, 0.7, 0.5),
@@ -400,14 +528,27 @@ class PsychographicSegmenter:
         personas = {}
         for name, desc, b_size, c_mult, p_sens in persona_defs:
             size = b_size + np.random.uniform(-5, 5)
-            risk = min(10, max(1, 5 * c_mult + np.random.uniform(-1, 1)))
-            sensitivity = min(10, max(1, 6 * p_sens + np.random.uniform(-1.5, 1.5)))
+            
+            # Use real churn risk if available, otherwise use base
+            if real_churn_risk is not None and 'Casual Viewer' in name:
+                # Apply real data to Casual Viewer (most likely to match low engagement)
+                risk = min(10, max(1, real_churn_risk + np.random.uniform(-0.5, 0.5)))
+            else:
+                risk = min(10, max(1, 5 * c_mult + np.random.uniform(-1, 1)))
+            
+            # Use real price sensitivity if available, otherwise use base
+            if real_price_sensitivity is not None and 'Budget Conscious' in name:
+                # Apply real data to Budget Conscious (most price sensitive)
+                sensitivity = min(10, max(1, real_price_sensitivity + np.random.uniform(-0.5, 0.5)))
+            else:
+                sensitivity = min(10, max(1, 6 * p_sens + np.random.uniform(-1.5, 1.5)))
             
             personas[name] = {
                 'description': desc,
                 'size_pct': round(float(size), 1),
                 'churn_risk': round(float(risk), 1),
-                'price_sensitivity': round(float(sensitivity), 1)
+                'price_sensitivity': round(float(sensitivity), 1),
+                'data_source': 'real' if (real_churn_risk is not None or real_price_sensitivity is not None) else 'synthetic'
             }
             
         total = sum(p['size_pct'] for p in personas.values())

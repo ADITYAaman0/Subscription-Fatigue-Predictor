@@ -1,112 +1,132 @@
-# 💰 Subscription Fatigue Predictor v2.0
+﻿# 💰 Subscription Fatigue Predictor v2.5
 
-**Optimize pricing, mitigate churn, and navigate market saturation with AI-driven economic intelligence.**
+**AI-Driven Economic Intelligence for Subscription Businesses**  
+Predict churn, optimize pricing, and navigate the streaming wars with data science.
 
-![Premium Dashboard](https://img.shields.io/badge/UI-Premium_Glassmorphic-blueviolet)
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-
----
-
-## 🚩 The Problem: Subscription Fatigue
-In a crowded digital landscape, consumers are reaching a breaking point. Indiscriminate price increases often trigger catastrophic churn. Businesses lack the microscopic visibility needed to understand:
-- **Saturation Points**: At what exact price do we lose the majority of our base?
-- **Competitive Resonance**: How do our rivals' price changes impact *our* retention?
-- **Diversion Paths**: Where do our users go when they leave?
-
-## 💡 The Solution: Economic Intelligence Engine
-The **Subscription Fatigue Predictor** transforms raw metrics into strategic foresight. It combines classical economic models with modern machine learning to:
-- **Simulate Market Shifts**: Predict final market shares after concurrent price changes.
-- **Detect Early Warning Signals**: Identify cancellation intent via search trend anomalies.
-- **Optimize Revenue**: Calculate the mathematically optimal bundle price to maximize Net Present Value (NPV).
-
-## 📊 Project Results & Impact
-- **Churn Mitigation**: Forecast retention ROI to deploy the most cost-effective rescue campaigns.
-- **Precision Pricing**: Identify "Consumer Surplus" to capture value without triggering fatigue.
-- **Segment Intelligence**: Cluster users by psychographic sensitivity to tailor pricing strategies.
+[![Open In Jupyter](https://img.shields.io/badge/Main_Submission-Project_Submission.ipynb-F37626?logo=jupyter&style=for-the-badge)](Project_Submission.ipynb)
+[![Streamlit App](https://img.shields.io/badge/Dashboard-Live_Demo-FF4B4B?style=for-the-badge&logo=streamlit)](src/visualization/dashboard.py)
+[![Tests](https://img.shields.io/badge/Tests-Passing-2ecc71?style=for-the-badge&logo=pytest)](tests/)
 
 ---
 
-## 🔬 Data Universe & Methodology
-The system operates on a robust data architecture, utilizing both historical records and real-time signals.
+## 🚀 START HERE
 
-### Data Sources
-- **Pricing History**: Tracks SKU-level price evolution across the competitive landscape.
-- **Subscriber Metrics**: Ingests counts, ARPU, and baseline churn rates.
-- **Search Intensity**: Monitors high-intent keywords (e.g., "Cancel Netflix") to capture pre-churn sentiment.
-- **Synthetic Generation**: Includes a high-fidelity data generator (`setup.py`) for benchmarking and demonstration.
+**The Master Source of Truth for this project is the [Project_Submission.ipynb](Project_Submission.ipynb) notebook.**
 
-### Key Analytical Metrics
-- **XGBoost Risk Score**: Probability of churn for specific price-hike scenarios.
-- **Bertrand Nash Equilibrium**: Theoretical optimal pricing in a competitive oligopoly.
-- **Z-Score Anomaly detection**: Statistical verification of search volume spikes.
-- **NPV (Net Present Value)**: 12-month financial projection of bundle strategies.
+It contains the complete narrative:
+1. **Problem Definition**: Why subscription fatigue matters in 2026
+2. **Data Exploration**: EDA with 9+ visualizations
+3. **Model Architecture**: XGBoost + Econometric Models
+4. **Evaluation**: Confusion matrix, ROC curves, feature importance
+5. **Ethical Considerations**: Responsible AI practices
 
 ---
 
-## 🎨 Visualization Gallery
-The system features a **Premium Glassmorphic Dashboard** built with Streamlit and Plotly:
-- **Market Overview**: Real-time KPIs for total reach, revenue, and share.
-- **Pricing Timeline**: Comparative evolution of rival service costs.
-- **Market Shift Simulator**: Interactive "What-If" tool for multi-service competition.
-- **Signal Heatmaps**: Intensity mapping of cancellation intent over time.
+## 📊 Visualization Gallery
+
+### Dashboard Preview
+![Dashboard](assets/dashboard_v2.png)
+*Premium glassmorphic Streamlit dashboard with real-time market intelligence*
+
+### Model Visualizations (Generated in Notebook)
+
+| Visualization | Description |
+|---------------|-------------|
+| **Churn Distribution** | Pie chart + bar charts showing churn by contract type |
+| **Tenure Analysis** | Histograms and churn rate by customer tenure |
+| **Correlation Heatmap** | Feature relationships and churn predictors |
+| **Pricing Timeline** | Interactive Plotly chart of streaming prices 2019-2026 |
+| **Feature Importance** | XGBoost feature importance ranking |
+| **Confusion Matrix** | Classification performance breakdown |
+| **ROC & PR Curves** | Model discrimination and precision-recall tradeoffs |
 
 ---
 
-## 📁 Project Structure
-
-```bash
-subscription-fatigue-predictor/
-├── src/                        # Core Application Source
-│   ├── models/                 # Analytical Engines
-│   │   ├── economic/           # Bertrand & Elasticity
-│   │   ├── ml/                 # XGBoost & Causal Forest
-│   │   ├── statistical/        # Change Point Detection
-│   │   └── advanced_models.py  # Consolidated Competitive Logic
-│   ├── visualization/          # Streamlit Premium Dashboard
-│   ├── data/                   # Data Ingestion & Processing
-│   └── utils/                  # Global Config & Constants
-├── data/                       # Local SQLite Database
-├── config/                     # Environment Configurations
-├── docs/                       # Technical Methodology & API Ref
-├── notebooks/                  # Research & Development
-├── tests/                      # Comprehensive Unit Tests
-├── requirements.txt            # Operational Dependencies
-└── README.md                   # Project Manifesto
-```
-
----
-
-## 🚀 Quick Start
+## 🛠️ Quick Start
 
 ### 1. Installation
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/subscription-fatigue-predictor.git
+# Clone and setup environment
+git clone <repo-url>
 cd subscription-fatigue-predictor
 
-# Create & activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # venv\Scripts\activate on Windows
+# Create virtual environment (recommended)
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+source .venv/bin/activate  # Linux/Mac
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Initialization & Execution
+### 2. Run the Notebook
+Launch Jupyter to view the full analysis:
 ```bash
-# Initialize the database and generate high-fidelity sample data
-python setup.py
+jupyter notebook Project_Submission.ipynb
+```
 
-# Launch the premium interactive intelligence suite
+### 3. Launch the Dashboard
+Experience the glassmorphic interactive UI:
+```bash
 streamlit run src/visualization/dashboard.py
 ```
 
 ---
 
-## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 📂 Repository Structure
+
+```
+subscription-fatigue-predictor/
+├── 📓 Project_Submission.ipynb    # Main Submission (START HERE)
+├── 📄 README.md                   # This file
+├── 📄 requirements.txt            # Python dependencies
+├── 📄 LICENSE                     # MIT License
+│
+├── 📁 src/                        # Source code
+│   ├── data/                      # Data ingestion & schema
+│   ├── models/                    # ML, Economic, Statistical models
+│   └── visualization/             # Streamlit dashboard
+│
+├── 📁 data/                       # SQLite database
+├── 📁 assets/                     # Images and visualizations
+├── 📁 tests/                      # Automated test suite
+└── 📁 docs/                       # Technical documentation
+```
 
 ---
 
-**Last Updated**: January 2026 | **Version**: 2.0.0
+## 🧪 Testing & Reproducibility
+
+This project includes a comprehensive test suite.
+
+```bash
+# Run all tests
+pytest tests/test_notebook_smoke.py -v
+
+# Run slow tests (full notebook execution)
+pytest tests/test_notebook_smoke.py::TestNotebookExecution::test_notebook_executes_successfully -v --timeout=600
+```
+
+### Reproducibility
+- **Random Seed**: All random operations use `RANDOM_SEED = 42`
+- **Dependencies**: Pinned in `requirements.txt`
+- **Database**: SQLite at `data/subscription_fatigue.db`
+
+---
+
+## 📈 Model Performance
+
+| Metric | Score |
+|--------|-------|
+| **Accuracy** | ~80% |
+| **ROC-AUC** | ~0.84 |
+| **Precision** | ~65% |
+| **Recall** | ~52% |
+
+---
+
+## 👤 Author
+
+**KassITsolutions**
+
+📅 January 2026 | 📝 MIT License

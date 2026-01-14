@@ -45,6 +45,11 @@ class ChurnRiskPredictor:
         
         Calculates percentage changes, historical elasticity, and time-lagged 
         variables to provide the model with temporal context.
+        
+        Now includes:
+        - News sentiment scores (from news_articles table)
+        - Real search volume (from Google Trends)
+        - Competitor pricing (from real_global_streaming)
         """
         features = pd.DataFrame()
         
@@ -58,8 +63,25 @@ class ChurnRiskPredictor:
         if 'subscriber_count' in df.columns:
             features['subscriber_growth_pct'] = df['subscriber_count'].pct_change() * 100
         
+        # REAL DATA PRIORITY: Google Trends 'intent to churn'
         if 'search_volume' in df.columns:
             features['cancel_search_volume'] = df['search_volume']
+        else:
+            # Fallback only if missing (should be filled by pipeline now)
+            features['cancel_search_volume'] = 0.0
+        
+        # REAL DATA PRIORITY: News Sentiment
+        if 'news_sentiment' in df.columns:
+            features['news_sentiment_score'] = df['news_sentiment']
+        elif 'sentiment_score' in df.columns:
+            features['news_sentiment_score'] = df['sentiment_score']
+        else:
+            features['news_sentiment_score'] = 0.0 # Neutral default
+        
+        # NEW: Competitor price differential
+        if 'competitor_avg_price' in df.columns and 'price' in df.columns:
+            features['price_vs_competitors'] = df['price'] - df['competitor_avg_price']
+            features['price_ratio_competitors'] = df['price'] / (df['competitor_avg_price'] + 0.01)
         
         # Aggregate lagged signals to capture momentum
         for col in features.columns:
@@ -85,7 +107,9 @@ class ChurnRiskPredictor:
         return self.model.predict(X_scaled)
     
     def predict_saturation(self, current_price, proposed_price_increase_pct, 
-                          historical_elasticity=None, growth_rate=None):
+                          historical_elasticity=None, growth_rate=None,
+                          news_sentiment=None, search_volume=None,
+                          competitor_avg_price=None):
         """
         Assess market saturation risk for a specific price update.
         
@@ -93,6 +117,11 @@ class ChurnRiskPredictor:
         - CRITICAL: > 5% churn
         - HIGH: > 3% churn
         - MODERATE: > 1% churn
+        
+        Now accepts additional real-world signals:
+        - news_sentiment: Average sentiment from news articles (range: -1 to 1)
+        - search_volume: Real search volume from Google Trends
+        - competitor_avg_price: Average competitor pricing for context
         
         Returns:
             dict: Probabilistic churn forecast and categorical risk level.
@@ -103,8 +132,15 @@ class ChurnRiskPredictor:
             'price_change_pct': [proposed_price_increase_pct],
             'historical_elasticity': [historical_elasticity or -0.8],
             'subscriber_growth_pct': [growth_rate or 2.0],
-            'cancel_search_volume': [50]
+            'cancel_search_volume': [search_volume or 50],
+            'news_sentiment_score': [news_sentiment or 0.0]
         })
+        
+        # Add competitor pricing features if available
+        if competitor_avg_price is not None:
+            sample['competitor_avg_price'] = [competitor_avg_price]
+            sample['price_vs_competitors'] = [current_price - competitor_avg_price]
+            sample['price_ratio_competitors'] = [current_price / (competitor_avg_price + 0.01)]
         
         # Apply lag feature replication for single-point inference
         for col in sample.columns:
@@ -114,7 +150,17 @@ class ChurnRiskPredictor:
             predicted_churn = self.predict(sample)[0]
         except:
             # Implement heuristic fallback if model state is uninitialized
-            predicted_churn = 2.0 + (proposed_price_increase_pct / 10) * 1.2
+            base_churn = 2.0 + (proposed_price_increase_pct / 10) * 1.2
+            
+            # Adjust based on news sentiment (negative sentiment increases churn risk)
+            if news_sentiment is not None:
+                base_churn += abs(news_sentiment) * 0.5 if news_sentiment < 0 else 0
+            
+            # Adjust based on search volume (higher search = higher churn risk)
+            if search_volume is not None:
+                base_churn += (search_volume / 100) * 0.1
+            
+            predicted_churn = base_churn
         
         risk_level = "CRITICAL" if predicted_churn > 5 else \
                      "HIGH" if predicted_churn > 3 else \
@@ -125,7 +171,12 @@ class ChurnRiskPredictor:
             'proposed_price_increase_pct': proposed_price_increase_pct,
             'predicted_churn_rate': round(float(predicted_churn), 2),
             'risk_level': risk_level,
-            'saturation_likely': predicted_churn > 3
+            'saturation_likely': predicted_churn > 3,
+            'features_used': {
+                'news_sentiment': news_sentiment is not None,
+                'real_search_volume': search_volume is not None,
+                'competitor_pricing': competitor_avg_price is not None
+            }
         }
 
 

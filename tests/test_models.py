@@ -138,5 +138,47 @@ class TestBertrandCompetition:
         assert all(result >= marginal_costs)  # Prices > costs
 
 
+# =============================================================================
+# ADVANCED ANALYTICS TESTS
+# =============================================================================
+
+class TestContentValueModel:
+    """Tests for Content Value Modeling."""
+    
+    def test_content_score_calculation(self):
+        """Test content value score calculation."""
+        from src.models.analytics.content_value import ContentValueModel, create_sample_content_data
+        
+        content_df = create_sample_content_data()
+        model = ContentValueModel(content_df)
+        
+        score = model.calculate_content_value_score(company_id=1, lookahead_days=30)
+        
+        assert score.content_score >= 0
+        assert score.churn_adjustment <= 1.0
+        assert score.churn_adjustment >= 0.75  # Max 25% reduction
+        assert isinstance(score.top_releases, list)
+    
+    def test_churn_features_generation(self):
+        """Test feature generation for ChurnRiskPredictor integration."""
+        from src.models.analytics.content_value import ContentValueModel, create_sample_content_data
+        
+        content_df = create_sample_content_data()
+        model = ContentValueModel(content_df)
+        
+        features = model.get_churn_features(company_id=1)
+        
+        assert 'content_score_30d' in features
+        assert 'content_score_90d' in features
+        assert 'upcoming_releases_30d' in features
+        assert 'content_churn_adjustment' in features
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

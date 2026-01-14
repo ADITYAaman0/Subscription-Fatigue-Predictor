@@ -25,11 +25,12 @@ KAGGLE_KEY = os.getenv('KAGGLE_KEY', 'your_key')
 NEWS_API_KEY = os.getenv('NEWS_API_KEY', 'your_api_key')
 
 # Data Collection Settings
-SERVICES = ['Netflix', 'Spotify', 'Disney Plus', 'HBO Max']
+SERVICES = ['Netflix', 'Disney Plus', 'HBO Max', 'Amazon Prime']
 GOOGLE_TRENDS_KEYWORDS = [
     'Cancel Netflix',
-    'Cancel Spotify',
     'Cancel Disney Plus',
+    'Cancel HBO Max',
+    'Cancel Amazon Prime',
     'streaming service expensive',
     'Netflix price increase'
 ]
