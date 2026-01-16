@@ -1,4 +1,4 @@
-﻿# 💰 Subscription Fatigue Predictor v2.5
+﻿# 💰 Subscription Fatigue Predictor v1.0
 
 **AI-Driven Economic Intelligence for Subscription Businesses**  
 Predict churn, optimize pricing, and navigate the streaming wars with data science.
@@ -130,4 +130,5 @@ pytest tests/test_notebook_smoke.py::TestNotebookExecution::test_notebook_execut
 **AdityaAman**
 
 📅 January 2026 | 📝 MIT License
+
 
