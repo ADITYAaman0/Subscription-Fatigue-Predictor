@@ -385,7 +385,16 @@ def load_and_prepare_data():
             # 4. NEWS & PROVENANCE
             news_data = safe_read("SELECT * FROM news_articles", conn)
             provenance = safe_read("SELECT * FROM data_provenance", conn)
+            
+            # Global streaming fallback
             global_streaming = safe_read("SELECT * FROM real_global_streaming", conn)
+            if global_streaming.empty:
+                global_streaming = safe_read("SELECT * FROM kaggle_global_streaming_dataset_csv", conn)
+            if global_streaming.empty:
+                # Try generic pattern
+                tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%global_streaming%'", conn)
+                if not tables_df.empty:
+                    global_streaming = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
 
             # Cleanup and Types
             for df in [pricing, metrics, companies]:
@@ -394,7 +403,16 @@ def load_and_prepare_data():
                     pass  # Silently fail if merge doesn't work
             
             trends = safe_read("SELECT * FROM search_trends", conn)
+            
+            # Churn data fallback
             kaggle_data = safe_read("SELECT * FROM real_world_churn_data", conn)
+            if kaggle_data.empty:
+                kaggle_data = safe_read("SELECT * FROM kaggle_telco_customer_churn_csv", conn)
+            if kaggle_data.empty:
+                # Try generic pattern
+                tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%churn%'", conn)
+                if not tables_df.empty:
+                    kaggle_data = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
             news_data = safe_read("SELECT * FROM news_articles", conn)
             provenance = safe_read("SELECT * FROM data_provenance", conn)
             

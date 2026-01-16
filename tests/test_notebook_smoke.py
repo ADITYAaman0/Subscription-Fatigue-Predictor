@@ -23,6 +23,8 @@ class TestNotebookExecution:
         """Set up test environment."""
         self.notebook_path = PROJECT_ROOT / 'Project_Submission.ipynb'
         self.db_path = PROJECT_ROOT / 'data' / 'subscription_fatigue.db'
+        self.deploy_db_path = PROJECT_ROOT / 'data' / 'subscription_fatigue_deployed.db'
+
     
     def test_notebook_exists(self):
         """Verify the main notebook file exists."""
@@ -119,11 +121,12 @@ class TestNotebookExecution:
         except ImportError:
             pytest.skip("nbformat/nbconvert not installed")
         
-        # Ensure database exists
-        if not self.db_path.exists():
+        # Ensure at least one database exists
+        if not self.db_path.exists() and not self.deploy_db_path.exists():
             from src.data.collectors.data_ingestion import DataIngestionPipeline
             pipeline = DataIngestionPipeline(str(self.db_path))
             pipeline.run_full_pipeline()
+
         
         # Load and execute notebook
         with open(self.notebook_path, 'r', encoding='utf-8') as f:

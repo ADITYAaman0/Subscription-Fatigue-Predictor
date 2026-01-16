@@ -1,7 +1,7 @@
 import os
 import logging
 import pandas as pd
-from kaggle.api.kaggle_api_extended import KaggleApi
+import pandas as pd
 from src.utils.config import KAGGLE_USERNAME, KAGGLE_KEY, DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -39,8 +39,22 @@ class KaggleDataCollector:
     }
     
     def __init__(self):
-        self.api = KaggleApi()
-        self._authenticate()
+        self._api = None
+        
+    @property
+    def api(self):
+        """Lazy initialization of the Kaggle API."""
+        if self._api is None:
+            try:
+                from kaggle.api.kaggle_api_extended import KaggleApi
+                self._api = KaggleApi()
+                self._authenticate()
+            except Exception as e:
+                logger.error(f"Could not initialize Kaggle API: {e}")
+                # We don't raise here to allow the class to be instantiated,
+                # but individual download methods will fail gracefully.
+                pass
+        return self._api
         
     def _authenticate(self):
         """Authenticates with Kaggle using environment credentials."""

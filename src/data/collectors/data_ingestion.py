@@ -71,11 +71,11 @@ class DataIngestionPipeline:
         """Generate sample companies data."""
         logger.info("Generating sample companies data...")
         companies = [
-            {'company_id': 1, 'name': 'Netflix', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'NFLX'},
-            {'company_id': 2, 'name': 'Spotify', 'sector': 'Music', 'country': 'US', 'stock_symbol': 'SPOT'},
-            {'company_id': 3, 'name': 'Disney Plus', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'DIS'},
-            {'company_id': 4, 'name': 'HBO Max', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'WBD'},
-            {'company_id': 5, 'name': 'Amazon Prime', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'AMZN'}
+            {'id': 1, 'company_id': 1, 'name': 'Netflix', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'NFLX'},
+            {'id': 2, 'company_id': 2, 'name': 'Spotify', 'sector': 'Music', 'country': 'US', 'stock_symbol': 'SPOT'},
+            {'id': 3, 'company_id': 3, 'name': 'Disney Plus', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'DIS'},
+            {'id': 4, 'company_id': 4, 'name': 'HBO Max', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'WBD'},
+            {'id': 5, 'company_id': 5, 'name': 'Amazon Prime', 'sector': 'Streaming', 'country': 'US', 'stock_symbol': 'AMZN'}
         ]
         return pd.DataFrame(companies)
 

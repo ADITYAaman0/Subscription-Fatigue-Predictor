@@ -170,6 +170,8 @@ def copy_essential_tables(source_conn, dest_conn):
         'real_pricing_history',
         'real_global_streaming',
         'kaggle_netflix_subscribers',
+        'kaggle_telco_customer_churn_csv',
+        'kaggle_global_streaming_dataset_csv',
         'data_provenance',
         'news_articles'
     ]
