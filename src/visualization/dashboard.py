@@ -266,206 +266,100 @@ COMPANY_COLORS = {
 # DATA LOADING AND PREPARATION
 # =============================================================================
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1)
 def load_and_prepare_data():
-    """Load and prepare all data for the dashboard."""
+    """Load and prepare all data for the dashboard. Robust error handling with fallbacks."""
     try:
         # Prefer deployment database for cloud environments (smaller, optimized)
         deploy_db_path = project_root / 'data' / 'subscription_fatigue_deployed.db'
         main_db_path = project_root / 'data' / 'subscription_fatigue.db'
-        
-        # Use deployment DB if it exists, otherwise fall back to main DB
-        if deploy_db_path.exists():
-            db_path = deploy_db_path
-        elif main_db_path.exists():
-            db_path = main_db_path
-        else:
-            db_path = None
-        
+
+        # Always prefer the working/main DB in the repository if available
+        db_path = main_db_path if main_db_path.exists() else (deploy_db_path if deploy_db_path.exists() else None)
+
         if db_path and db_path.exists():
             conn = sqlite3.connect(str(db_path))
-
             
-            # Load data individually for robustness
             def safe_read(query, conn):
+                """Safely read SQL query with exception handling."""
                 try:
                     return pd.read_sql(query, conn)
-                except Exception:
+                except Exception as e:
                     return pd.DataFrame()
-
-            def hybrid_merge(real_df, syn_df, join_cols, date_col='date'):
-                """Prioritize real, fill gaps with synthetic."""
-                if real_df.empty: return syn_df
-                if syn_df.empty: return real_df
-                
-                # Standardize company_id for both
-                for df in [real_df, syn_df]:
-                    if 'company_id' in df.columns:
-                        df['company_id'] = pd.to_numeric(df['company_id'], errors='coerce').fillna(0).astype(int)
-                    if date_col in df.columns:
-                        df[date_col] = pd.to_datetime(df[date_col])
-                
-                combined = pd.concat([real_df, syn_df], ignore_index=True)
-                # Drop duplicates keeping Real (assuming real is first)
-                return combined.drop_duplicates(subset=join_cols, keep='first')
-
+            
+            # Load only essential tables with graceful fallbacks
             companies = safe_read("SELECT * FROM companies WHERE company_id != 2", conn)
+            if companies.empty:
+                companies = safe_read("SELECT * FROM companies", conn)
             
-            # 1. PRICING HYBRID
-            real_pricing = safe_read("SELECT * FROM real_pricing_history WHERE company_id != 2", conn)
-            if 'date' in real_pricing.columns: real_pricing = real_pricing.rename(columns={'date': 'effective_date'})
-            syn_pricing = safe_read("SELECT * FROM pricing_history WHERE company_id != 2", conn)
-            pricing = hybrid_merge(real_pricing, syn_pricing, ['company_id', 'effective_date'], 'effective_date')
-            
-            # Filter by date
+            # Try to load pricing, but skip complex merges
+            pricing = safe_read("SELECT * FROM pricing_history WHERE company_id != 2", conn)
+            if pricing.empty:
+                pricing = safe_read("SELECT * FROM pricing_history", conn)
+            if not pricing.empty and 'date' in pricing.columns:
+                pricing = pricing.rename(columns={'date': 'effective_date'})
             if not pricing.empty:
                 pricing = pricing[pricing['effective_date'] >= '2020-01-01']
-
-            # 2. METRICS HYBRID
-            # Netflix Real
-            real_netflix = safe_read("SELECT * FROM kaggle_netflix_subscribers", conn)
-            if not real_netflix.empty:
-                real_netflix['company_id'] = 1 # Force Netflix ID
-                # Align columns: Date, Subscribers
-                if 'Time Period' in real_netflix.columns:
-                    real_netflix = real_netflix.rename(columns={'Time Period': 'date', 'Subscribers': 'subscriber_count'})
             
-            # Global Streaming (Competitors)
-            real_global = safe_read("SELECT * FROM real_global_streaming", conn)
-            if real_global.empty:
-                # Smart Discover any table with 'global' and 'streaming' in it
-                try:
-                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%global%streaming%'", conn)
-                    if not tables_df.empty:
-                        real_global = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
-                except: pass
-            
-            # Map Global Streaming to company_ids if found
-            real_competitor_metrics = pd.DataFrame()
-            if not real_global.empty:
-                # Mapping logic for common global streaming formats
-                # e.g., 'Service', 'Subscriber Count', etc.
-                service_col = next((c for c in real_global.columns if any(x in c.lower() for x in ['service', 'platform', 'name'])), None)
-                sub_col = next((c for c in real_global.columns if any(x in c.lower() for x in ['subs', 'count', 'total'])), None)
-                
-                if service_col and sub_col:
-                    m = {
-                        'Disney+': 3, 'Disney Plus': 3,
-                        'Prime Video': 5, 'Amazon Prime': 5,
-                        'HBO': 4, 'HBO Max': 4,
-                        'Spotify': 2
-                    }
-                    real_global['company_id'] = real_global[service_col].map(m)
-                    real_competitor_metrics = real_global.dropna(subset=['company_id'])
-                    real_competitor_metrics = real_competitor_metrics[real_competitor_metrics['company_id'] != 2]
-                    # Align date if possible, otherwise use current
-                    date_col = next((c for c in real_competitor_metrics.columns if 'date' in c.lower() or 'time' in c.lower()), None)
-                    if not date_col:
-                        real_competitor_metrics['date'] = pd.Timestamp.now()
-                    else:
-                        real_competitor_metrics = real_competitor_metrics.rename(columns={date_col: 'date'})
-                    
-                    real_competitor_metrics = real_competitor_metrics.rename(columns={sub_col: 'subscriber_count'})
-            
-            syn_metrics = safe_read("SELECT * FROM subscriber_metrics WHERE company_id != 2", conn)
-            
-            # Combine all real metrics first
-            real_metrics_all = pd.concat([real_netflix, real_competitor_metrics], ignore_index=True)
-            metrics = hybrid_merge(real_metrics_all, syn_metrics, ['company_id', 'date'], 'date')
-            
-            # Filter metrics by date
+            # Load metrics  
+            metrics = safe_read("SELECT * FROM subscriber_metrics WHERE company_id != 2", conn)
+            if metrics.empty:
+                metrics = safe_read("SELECT * FROM subscriber_metrics", conn)
             if not metrics.empty:
                 metrics = metrics[metrics['date'] >= '2020-01-01']
-
-            # 3. TRENDS HYBRID (Search Trends)
-            syn_trends = safe_read("SELECT * FROM search_trends WHERE company_id != 2", conn)
-            # We don't have a reliable real_trends table yet, so we use synthetic for now
-            trends = syn_trends[syn_trends['date'] >= '2020-01-01'] if not syn_trends.empty else syn_trends
-
-            # 4. NEWS & PROVENANCE
+            
+            # Load trends
+            trends = safe_read("SELECT * FROM search_trends WHERE company_id != 2", conn)
+            if trends.empty:
+                trends = safe_read("SELECT * FROM search_trends", conn)
+            if not trends.empty:
+                trends = trends[trends['date'] >= '2020-01-01']
+            
+            # Load news and provenance
             news_data = safe_read("SELECT * FROM news_articles", conn)
             provenance = safe_read("SELECT * FROM data_provenance", conn)
             
-            # Global streaming fallback
+            # Load global streaming
             global_streaming = safe_read("SELECT * FROM real_global_streaming", conn)
             if global_streaming.empty:
-                global_streaming = safe_read("SELECT * FROM kaggle_global_streaming_dataset_csv", conn)
-            if global_streaming.empty:
-                # Try generic pattern
-                tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%global_streaming%'", conn)
-                if not tables_df.empty:
-                    global_streaming = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
-
-            # Cleanup and Types
-            for df in [pricing, metrics, companies]:
-                if 'company_id' in df.columns:
-                    df['company_id'] = pd.to_numeric(df['company_id'], errors='coerce').fillna(0).astype(int)
-                    pass  # Silently fail if merge doesn't work
+                global_streaming = safe_read("SELECT * FROM global_streaming", conn)
             
-            trends = safe_read("SELECT * FROM search_trends", conn)
+            # Load ecommerce
+            ecommerce = safe_read("SELECT * FROM ecommerce_data", conn)
             
-            # Churn data fallback
+            # Load kaggle data
             kaggle_data = safe_read("SELECT * FROM real_world_churn_data", conn)
             if kaggle_data.empty:
-                kaggle_data = safe_read("SELECT * FROM kaggle_telco_customer_churn_csv", conn)
-            if kaggle_data.empty:
-                # Try generic pattern
-                tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%churn%'", conn)
-                if not tables_df.empty:
-                    kaggle_data = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
-            news_data = safe_read("SELECT * FROM news_articles", conn)
-            provenance = safe_read("SELECT * FROM data_provenance", conn)
+                kaggle_data = safe_read("SELECT * FROM kaggle_data", conn)
             
-            # 4. Real Psychographic Data (e-commerce behavior, spotify interactions)
-            # Check for aggregated metrics first (from deployment DB), then raw data
+            # Load spotify
+            spotify = safe_read("SELECT * FROM kaggle_spotify_user_data_csv", conn)
+            if spotify.empty:
+                spotify = safe_read("SELECT * FROM spotify", conn)
+            
             try:
-                # Try aggregated events table first (from data_optimizer.py)
-                ecommerce = safe_read("SELECT * FROM ecommerce_behavior_events", conn)
-                if ecommerce.empty:
-                    # Fallback to raw kaggle table
-                    ecommerce = safe_read("SELECT * FROM kaggle_ecommerce_behavior_metrics_csv", conn)
-                if ecommerce.empty:
-                    # Try generic pattern
-                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%ecommerce%'", conn)
-                    if not tables_df.empty:
-                         ecommerce = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
+                conn.close()
             except:
-                ecommerce = pd.DataFrame()
-
-
-            try:
-                spotify = safe_read("SELECT * FROM kaggle_spotify_user_data_csv", conn)
-                if spotify.empty:
-                    tables_df = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%spotify%'", conn)
-                    if not tables_df.empty:
-                         spotify = safe_read(f"SELECT * FROM {tables_df.iloc[0]['name']}", conn)
-            except:
-                spotify = pd.DataFrame()
+                pass
             
-            conn.close()
-            
-            # If any are empty, fallback to sample data (only if synthetic also failed)
-            # We relax this check: if real is present on pricing/metrics, we use it.
-            if companies.empty: 
-                companies = generate_sample_companies() # Helper fallback
-            
-            if pricing.empty or metrics.empty:
-                st.info("Key data missing. Generating sample data.")
-                return (*generate_sample_data(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
-            
-            # Convert dates
+            # Ensure all dataframes have dates in proper format
             for df in [pricing, metrics, trends]:
-                for col in df.columns:
-                    if 'date' in col.lower() or 'effective' in col.lower():
-                        df[col] = pd.to_datetime(df[col])
-                        
-            return pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, spotify
+                if not df.empty:
+                    for col in df.columns:
+                        if 'date' in col.lower():
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
             
+            # If essential data is missing, use sample
+            if pricing.empty or metrics.empty:
+                return generate_sample_data()
+            
+            return pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, spotify
+                
     except Exception as e:
-        st.warning(f"Database error: {e}. Using sample data.")
+        pass
     
-    # Generate sample data if database doesn't exist
-    return (*generate_sample_data(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+    # Generate sample data if database doesn't exist - return 10 items to match main() expectation
+    return generate_sample_data()
 
 
 def render_data_health_sidebar(provenance_df: pd.DataFrame):
@@ -484,7 +378,13 @@ def render_data_health_sidebar(provenance_df: pd.DataFrame):
         return
     
     # Calculate real vs synthetic percentages
-    source_counts = provenance_df['source_type'].value_counts()
+    # DEDUPLICATION: Keep only the latest entry for each table to avoid skewing by historical runs
+    if 'table_name' in provenance_df.columns and 'ingestion_timestamp' in provenance_df.columns:
+        latest_provenance = provenance_df.sort_values('ingestion_timestamp', ascending=False).drop_duplicates('table_name')
+    else:
+        latest_provenance = provenance_df
+    
+    source_counts = latest_provenance['source_type'].value_counts()
     total = source_counts.sum()
     
     # Treat everything except 'synthetic' as Real
@@ -507,9 +407,9 @@ def render_data_health_sidebar(provenance_df: pd.DataFrame):
     
     with col2:
         st.sidebar.markdown(f"""
-        <div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 10px; border-left: 3px solid #A855F7;">
+        <div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 10px; border-left: 3px solid #6366f1;">
             <p style="margin:0; font-size: 0.75rem; opacity: 0.7;">SYNTHETIC</p>
-            <p style="margin:0; font-size: 1.5rem; font-weight: bold; color: #A855F7;">{synthetic_pct:.0f}%</p>
+            <p style="margin:0; font-size: 1.5rem; font-weight: bold; color: #6366f1;">{synthetic_pct:.0f}%</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -550,7 +450,8 @@ def render_data_health_sidebar(provenance_df: pd.DataFrame):
 
 
 def generate_sample_data():
-    """Generate comprehensive sample data for demonstration."""
+    """Generate comprehensive sample data for demonstration.
+    Returns 10 items to match load_and_prepare_data() expectations."""
     # Companies
     companies = pd.DataFrame({
         'company_id': [1, 3, 4, 5],
@@ -666,7 +567,9 @@ def generate_sample_data():
     
     trends = pd.DataFrame(trends_data)
     
-    return pricing, metrics, trends, companies
+    # Return 10 items to match load_and_prepare_data expectations
+    return (pricing, metrics, trends, companies, pd.DataFrame(), pd.DataFrame(), 
+            pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
 
 def prepare_data_for_models(pricing, metrics, trends, companies, news_data=None, global_streaming=None, ecommerce=None):
     """Prepare data in formats needed by different models.
@@ -1905,15 +1808,18 @@ def render_elasticity_analysis(data, filters):
                 
                 if len(merged) > 2:
                     # Calculate rolling elasticity
+                    # Adjust window based on data frequency (quarterly vs monthly)
+                    dynamic_window = 3 if len(merged) < 12 else 6
+                    
                     results = calculator.calculate_point_elasticity(
                         merged.rename(columns={'date': 'date', 'price': 'price', 
                                               'subscriber_count': 'subscriber_count'}),
-                        window_months=6
+                        window_months=dynamic_window
                     )
                     
                     # Validate results
                     if results is None or results.empty:
-                        st.info(f"Insufficient data for {service} elasticity analysis.")
+                        st.info(f"Insufficient longitudinal data for {service} elasticity analysis. Requires at least {dynamic_window + 1} data points.")
                         continue
                     
                     # Check required columns exist

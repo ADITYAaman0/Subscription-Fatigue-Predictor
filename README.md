@@ -1,4 +1,4 @@
-﻿# 💰 Subscription Fatigue Predictor v1.0
+﻿# 💰 Subscription Fatigue Predictor v2.5
 
 **AI-Driven Economic Intelligence for Subscription Businesses**  
 Predict churn, optimize pricing, and navigate the streaming wars with data science.
@@ -23,7 +23,7 @@ It contains the complete narrative:
 ---
 
 ## 📊 Visualization Gallery
-### Dashboard Link: https://subscription-fatigue-predictor-petgpc66qjrucf2hndwlyt.streamlit.app/
+
 ### Dashboard Preview
 ![Dashboard](assets/dashboard_v2.png)
 *Premium glassmorphic Streamlit dashboard with real-time market intelligence*
@@ -127,8 +127,6 @@ pytest tests/test_notebook_smoke.py::TestNotebookExecution::test_notebook_execut
 
 ## 👤 Author
 
-**AdityaAman**
+**KassITsolutions**
 
 📅 January 2026 | 📝 MIT License
-
-

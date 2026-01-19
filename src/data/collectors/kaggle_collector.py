@@ -22,9 +22,9 @@ class KaggleDataCollector:
         'subscription_churn': 'saikatkumardey/customer-churn-prediction',  # General subscription churn
         
         # === STREAMING SERVICE DATASETS ===
-        'streaming_prices': 'justinrmiller/streaming-service-price-history',
-        'netflix_subscribers': 'pariaagharabi/netflix-customer-subscription',
-        'global_streaming': 'octopusteam/global-streaming-services-dataset',
+        'streaming_prices': 'webdevbadger/streaming-service-prices',
+        'netflix_subscribers': 'mauryansshivam/netflix-ott-revenue-and-subscribers-csv-file',
+        'global_streaming': 'mauryansshivam/walt-disney-ott-platforms-revenue-and-subscribers',
         'video_subscriptions': 'muhammadehsan02/streaming-video-subscriptions-datasets',
         
         # === ADDITIONAL STREAMING/MUSIC DATASETS ===
@@ -60,15 +60,36 @@ class KaggleDataCollector:
         """Authenticates with Kaggle using environment credentials."""
         try:
             # Set config dir to current directory so it picks up kaggle.json if present
-            os.environ['KAGGLE_CONFIG_DIR'] = os.getcwd()
+            # but prioritize environment variables from .env
+            os.environ['KAGGLE_CONFIG_DIR'] = str(DATA_DIR)
+            
+            if not KAGGLE_USERNAME or KAGGLE_USERNAME == 'your_username':
+                 logger.warning("KAGGLE_USERNAME is not set or is using placeholder value")
+                 return False
             
             os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
             os.environ['KAGGLE_KEY'] = KAGGLE_KEY
             self.api.authenticate()
             logger.info("Successfully authenticated with Kaggle API")
+            return True
         except Exception as e:
             logger.error(f"Failed to authenticate with Kaggle: {e}")
-            raise
+            return False
+
+    def validate_credentials(self) -> bool:
+        """Verifies if the Kaggle API credentials are valid and working."""
+        if self.api is None:
+            return False
+        try:
+            # Test connection by listing a tiny subset of datasets
+            self.api.dataset_list(search='netflix', page=1)
+            logger.info("Kaggle API connectivity validated successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Kaggle API validation failed: {e}")
+            if "401 - Unauthorized" in str(e):
+                logger.error("Check your KAGGLE_USERNAME and KAGGLE_KEY in the .env file.")
+            return False
 
     def download_dataset(self, dataset_slug, target_dir=None):
         """
