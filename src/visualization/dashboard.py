@@ -2023,7 +2023,7 @@ def main():
     
     # Load data
     with st.spinner("Loading data and preparing models..."):
-        pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce = load_and_prepare_data()
+        pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, metrics_summary = load_and_prepare_data()
         data = prepare_data_for_models(pricing, metrics, trends, companies, 
                                      news_data=news_data, 
                                      global_streaming=global_streaming,
@@ -2033,6 +2033,7 @@ def main():
         data['provenance'] = provenance     # Add provenance data
         data['global_streaming'] = global_streaming  # Add global streaming data
         data['ecommerce'] = ecommerce
+        data['metrics_summary'] = metrics_summary  # Store metrics summary
     
     # Create header
     create_header()
