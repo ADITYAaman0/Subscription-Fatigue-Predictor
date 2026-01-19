@@ -269,97 +269,110 @@ COMPANY_COLORS = {
 @st.cache_data(ttl=1)
 def load_and_prepare_data():
     """Load and prepare all data for the dashboard. Robust error handling with fallbacks."""
-    try:
-        # Prefer deployment database for cloud environments (smaller, optimized)
-        deploy_db_path = project_root / 'data' / 'subscription_fatigue_deployed.db'
-        main_db_path = project_root / 'data' / 'subscription_fatigue.db'
-
-        # Always prefer the working/main DB in the repository if available
-        db_path = main_db_path if main_db_path.exists() else (deploy_db_path if deploy_db_path.exists() else None)
-
-        if db_path and db_path.exists():
-            conn = sqlite3.connect(str(db_path))
-            
-            def safe_read(query, conn):
-                """Safely read SQL query with exception handling."""
-                try:
-                    return pd.read_sql(query, conn)
-                except Exception as e:
-                    return pd.DataFrame()
-            
-            # Load only essential tables with graceful fallbacks
-            companies = safe_read("SELECT * FROM companies WHERE company_id != 2", conn)
-            if companies.empty:
-                companies = safe_read("SELECT * FROM companies", conn)
-            
-            # Try to load pricing, but skip complex merges
-            pricing = safe_read("SELECT * FROM pricing_history WHERE company_id != 2", conn)
-            if pricing.empty:
-                pricing = safe_read("SELECT * FROM pricing_history", conn)
-            if not pricing.empty and 'date' in pricing.columns:
-                pricing = pricing.rename(columns={'date': 'effective_date'})
-            if not pricing.empty:
-                pricing = pricing[pricing['effective_date'] >= '2020-01-01']
-            
-            # Load metrics  
-            metrics = safe_read("SELECT * FROM subscriber_metrics WHERE company_id != 2", conn)
-            if metrics.empty:
-                metrics = safe_read("SELECT * FROM subscriber_metrics", conn)
-            if not metrics.empty:
-                metrics = metrics[metrics['date'] >= '2020-01-01']
-            
-            # Load trends
-            trends = safe_read("SELECT * FROM search_trends WHERE company_id != 2", conn)
-            if trends.empty:
-                trends = safe_read("SELECT * FROM search_trends", conn)
-            if not trends.empty:
-                trends = trends[trends['date'] >= '2020-01-01']
-            
-            # Load news and provenance
-            news_data = safe_read("SELECT * FROM news_articles", conn)
-            provenance = safe_read("SELECT * FROM data_provenance", conn)
-            
-            # Load global streaming
-            global_streaming = safe_read("SELECT * FROM real_global_streaming", conn)
-            if global_streaming.empty:
-                global_streaming = safe_read("SELECT * FROM global_streaming", conn)
-            
-            # Load ecommerce
-            ecommerce = safe_read("SELECT * FROM ecommerce_data", conn)
-            
-            # Load kaggle data
-            kaggle_data = safe_read("SELECT * FROM real_world_churn_data", conn)
-            if kaggle_data.empty:
-                kaggle_data = safe_read("SELECT * FROM kaggle_data", conn)
-            
-            # Load spotify
-            spotify = safe_read("SELECT * FROM kaggle_spotify_user_data_csv", conn)
-            if spotify.empty:
-                spotify = safe_read("SELECT * FROM spotify", conn)
-            
-            try:
-                conn.close()
-            except:
-                pass
-            
-            # Ensure all dataframes have dates in proper format
-            for df in [pricing, metrics, trends]:
-                if not df.empty:
-                    for col in df.columns:
-                        if 'date' in col.lower():
-                            df[col] = pd.to_datetime(df[col], errors='coerce')
-            
-            # If essential data is missing, use sample
-            if pricing.empty or metrics.empty:
-                return generate_sample_data()
-            
-            return pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, spotify
-                
-    except Exception as e:
-        pass
+    # Strictly use the main database - resolve relative to CWD (x:\spc)
+    db_path = Path('data/subscription_fatigue.db').resolve()
     
-    # Generate sample data if database doesn't exist - return 10 items to match main() expectation
-    return generate_sample_data()
+    if not db_path.exists():
+        st.error(f"Database not found at: {db_path}")
+        return generate_sample_data()
+
+    conn = sqlite3.connect(str(db_path))
+    
+    # Load companies (essential)
+    try:
+        companies = pd.read_sql("SELECT * FROM companies", conn)
+    except:
+        companies = pd.DataFrame()
+        
+    # Load pricing
+    try:
+        pricing = pd.read_sql("SELECT * FROM pricing_history", conn)
+        if not pricing.empty:
+            # Safely rename 'date' to 'effective_date' only if it won't cause duplicates
+            if 'date' in pricing.columns:
+                if 'effective_date' not in pricing.columns:
+                    pricing = pricing.rename(columns={'date': 'effective_date'})
+                else:
+                    # Both exist, prefer 'effective_date' and drop 'date'
+                    pricing = pricing.drop(columns=['date'])
+    except:
+        pricing = pd.DataFrame()
+        
+    # Load metrics  
+    try:
+        metrics = pd.read_sql("SELECT * FROM subscriber_metrics", conn)
+    except:
+        metrics = pd.DataFrame()
+        
+    # Load trends
+    try:
+        trends = pd.read_sql("SELECT * FROM search_trends", conn)
+    except:
+        trends = pd.DataFrame()
+    
+    # Load news and provenance
+    try:
+        news_data = pd.read_sql("SELECT * FROM news_articles", conn)
+    except:
+        news_data = pd.DataFrame()
+            
+    try:
+        provenance = pd.read_sql("SELECT * FROM data_provenance", conn)
+    except:
+        provenance = pd.DataFrame()
+    
+    # Load global streaming
+    try:
+        global_streaming = pd.read_sql("SELECT * FROM real_global_streaming", conn)
+        if global_streaming.empty:
+             global_streaming = pd.read_sql("SELECT * FROM global_streaming", conn) # Fallback
+    except:
+        global_streaming = pd.DataFrame()
+    
+    # Load ecommerce
+    try:
+        ecommerce = pd.read_sql("SELECT * FROM ecommerce_data", conn)
+    except:
+        ecommerce = pd.DataFrame()
+    
+    # Initialize metrics_summary (needed by notebook integration)
+    metrics_summary = pd.DataFrame()
+    
+    # Load kaggle data - PRIORITIZE real_world_churn_data
+    try:
+        kaggle_data = pd.read_sql("SELECT * FROM real_world_churn_data", conn)
+    except Exception as e:
+        st.error(f"KAGGLE LOAD ERROR: {e}")
+        kaggle_data = pd.DataFrame()
+
+    if kaggle_data.empty:
+        try:
+            kaggle_data = pd.read_sql("SELECT * FROM kaggle_telco_churn_WA_Fn_UseC__Telco_Customer_Churn", conn)
+        except:
+            pass
+    conn.close()
+    
+    # DEDUPLICATE ALL DATAFRAMES to prevent assemble errors
+    pricing = pricing.loc[:, ~pricing.columns.duplicated()].copy()
+    metrics = metrics.loc[:, ~metrics.columns.duplicated()].copy()
+    trends = trends.loc[:, ~trends.columns.duplicated()].copy()
+    companies = companies.loc[:, ~companies.columns.duplicated()].copy()
+    kaggle_data = kaggle_data.loc[:, ~kaggle_data.columns.duplicated()].copy()
+    
+    # Ensure all dataframes have dates in proper format
+    for df in [pricing, metrics, trends]:
+        if not df.empty:
+            for col in df.columns:
+                if 'date' in col.lower():
+                    # df[col] is now guaranteed to be a Series
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    # If essential data is missing, use sample
+    if pricing.empty or metrics.empty:
+        st.warning("Essential data missing from database, falling back to sample data.")
+        return generate_sample_data()
+    
+    return pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, metrics_summary
 
 
 def render_data_health_sidebar(provenance_df: pd.DataFrame):
@@ -723,7 +736,7 @@ def create_kpi_metrics(data, filters):
     total_subs = metrics_safe['subscriber_count'].sum()
     avg_arpu = metrics_safe['arpu'].mean()
     total_rev = total_subs * avg_arpu / 1e6
-    avg_churn = metrics_safe['churn_rate'].mean()
+    avg_churn = metrics_safe['churn_rate'].mean() * 100
     total_share = metrics_safe['market_share'].sum()
 
     with m1:
@@ -861,7 +874,7 @@ def plot_subscriber_dynamics(data, filters):
             
             fig.add_trace(go.Scatter(
                 x=service_data['date'],
-                y=service_data[col] / divisor,
+                y=service_data[col] / divisor * (100 if col == 'churn_rate' else 1),
                 name=service,
                 mode='lines',
                 line=dict(width=3 if col == 'subscriber_count' else 2, color=color),
@@ -1903,14 +1916,19 @@ def render_kaggle_data_tab(data):
     kaggle_df = data.get('kaggle_data', pd.DataFrame())
     
     if kaggle_df.empty:
-        st.warning("⚠️ Kaggle data not available. Please configure your Kaggle API credentials in .env and run setup.py")
-        st.code("""
-# Add to .env file:
-KAGGLE_USERNAME=your_username
-KAGGLE_KEY=your_api_key
+        st.warning("⚠️ Kaggle churn data not available in database. Ensure the database has been properly loaded with real data.")
+        st.info("""
+To reload the database with Kaggle data, run:
+```bash
+python rebuild_database_enhanced.py
+```
 
-# Then run:
-python setup.py
+Or manually ingest data:
+```python
+from src.data.collectors.data_ingestion import DataIngestionPipeline
+pipeline = DataIngestionPipeline()
+pipeline.ingest_all_data()
+```
         """)
         return
     
@@ -2005,7 +2023,7 @@ def main():
     
     # Load data
     with st.spinner("Loading data and preparing models..."):
-        pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce, _ = load_and_prepare_data()
+        pricing, metrics, trends, companies, kaggle_data, news_data, provenance, global_streaming, ecommerce = load_and_prepare_data()
         data = prepare_data_for_models(pricing, metrics, trends, companies, 
                                      news_data=news_data, 
                                      global_streaming=global_streaming,

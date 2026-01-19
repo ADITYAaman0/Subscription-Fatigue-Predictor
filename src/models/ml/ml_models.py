@@ -407,3 +407,230 @@ class HeterogeneousEffectAnalyzer:
         })
         
         return segment_analysis
+
+
+class ChurnClassifier:
+    """
+    Binary churn classifier using XGBoost with class imbalance handling.
+    
+    This classifier is designed specifically for the Telco Customer Churn dataset
+    and handles class imbalance using scale_pos_weight and proper feature encoding.
+    
+    Attributes:
+        model (xgb.XGBClassifier): Binary classifier with balanced class weights.
+        feature_names (list): Names of features used in training.
+        label_encoders (dict): Encoders for categorical variables.
+    """
+    
+    def __init__(self, scale_pos_weight=None):
+        """
+        Initialize the classifier with optimized parameters for churn prediction.
+        
+        Args:
+            scale_pos_weight: Weight for positive class. If None, will be calculated
+                             from training data as neg_count / pos_count.
+        """
+        self.scale_pos_weight = scale_pos_weight
+        self.model = None  # Initialized in train() with proper scale_pos_weight
+        self.feature_names = []
+        self.label_encoders = {}
+        self.is_trained = False
+        
+    def prepare_features(self, df):
+        """
+        Prepare features from Telco Customer Churn dataset.
+        
+        Encodes categorical variables and creates numeric features suitable for XGBoost.
+        
+        Args:
+            df: DataFrame with Telco churn columns
+            
+        Returns:
+            pd.DataFrame: Encoded feature matrix
+        """
+        from sklearn.preprocessing import LabelEncoder
+        
+        features = pd.DataFrame()
+        
+        # Numeric features - direct copy
+        numeric_cols = ['tenure', 'MonthlyCharges', 'TotalCharges', 'SeniorCitizen']
+        for col in numeric_cols:
+            if col in df.columns:
+                features[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Categorical features - encode
+        categorical_cols = [
+            'gender', 'Partner', 'Dependents', 'PhoneService', 'MultipleLines',
+            'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection',
+            'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract',
+            'PaperlessBilling', 'PaymentMethod'
+        ]
+        
+        for col in categorical_cols:
+            if col in df.columns:
+                if col not in self.label_encoders:
+                    self.label_encoders[col] = LabelEncoder()
+                    # Fit on unique values including 'Unknown' for robustness
+                    unique_vals = df[col].fillna('Unknown').astype(str).unique().tolist()
+                    if 'Unknown' not in unique_vals:
+                        unique_vals.append('Unknown')
+                    self.label_encoders[col].fit(unique_vals)
+                
+                # Transform with handling for unseen values
+                col_values = df[col].fillna('Unknown').astype(str)
+                try:
+                    features[col] = self.label_encoders[col].transform(col_values)
+                except ValueError:
+                    # Handle unseen labels by mapping to 'Unknown'
+                    features[col] = col_values.apply(
+                        lambda x: self.label_encoders[col].transform(['Unknown'])[0] 
+                        if x not in self.label_encoders[col].classes_ 
+                        else self.label_encoders[col].transform([x])[0]
+                    )
+        
+        # Feature engineering - derived features
+        if 'tenure' in features.columns and 'MonthlyCharges' in features.columns:
+            features['AvgMonthlySpend'] = features['TotalCharges'] / (features['tenure'] + 1)
+            features['ChargesPerTenure'] = features['MonthlyCharges'] * features['tenure']
+        
+        # Contract risk indicator (Month-to-month is highest risk)
+        if 'Contract' in df.columns:
+            features['IsMonthToMonth'] = (df['Contract'] == 'Month-to-month').astype(int)
+        
+        self.feature_names = features.columns.tolist()
+        return features.fillna(0)
+    
+    def prepare_target(self, df):
+        """
+        Prepare binary target variable from Churn column.
+        
+        Args:
+            df: DataFrame with 'Churn' column
+            
+        Returns:
+            np.ndarray: Binary array (1=Churned, 0=Retained)
+        """
+        if 'Churn' not in df.columns:
+            raise ValueError("DataFrame must have 'Churn' column")
+        
+        # Handle both 'Yes'/'No' and 1/0 formats
+        churn_values = df['Churn']
+        if churn_values.dtype == 'object':
+            return (churn_values == 'Yes').astype(int).values
+        else:
+            return churn_values.astype(int).values
+    
+    def train(self, X, y):
+        """
+        Train the classifier with automatic class balancing.
+        
+        Args:
+            X: Feature DataFrame or array
+            y: Binary target array
+        """
+        # Calculate scale_pos_weight if not provided
+        if self.scale_pos_weight is None:
+            neg_count = np.sum(y == 0)
+            pos_count = np.sum(y == 1)
+            self.scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+        
+        # Initialize model with calculated weights
+        self.model = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=5,
+            learning_rate=0.05,
+            scale_pos_weight=self.scale_pos_weight,  # Handle class imbalance
+            min_child_weight=3,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            random_state=42,
+            use_label_encoder=False,
+            eval_metric='logloss',
+            verbosity=0
+        )
+        
+        self.model.fit(X, y)
+        self.is_trained = True
+        
+        return self
+    
+    def predict(self, X):
+        """
+        Predict binary churn labels.
+        
+        Args:
+            X: Feature DataFrame or array
+            
+        Returns:
+            np.ndarray: Binary predictions (0=Retained, 1=Churned)
+        """
+        if not self.is_trained:
+            raise ValueError("Model must be trained before prediction")
+        return self.model.predict(X)
+    
+    def predict_proba(self, X):
+        """
+        Predict churn probabilities.
+        
+        Args:
+            X: Feature DataFrame or array
+            
+        Returns:
+            np.ndarray: Probability array with shape (n_samples, 2)
+                       Column 0: P(Retained), Column 1: P(Churned)
+        """
+        if not self.is_trained:
+            raise ValueError("Model must be trained before prediction")
+        return self.model.predict_proba(X)
+    
+    def get_feature_importance(self, top_n=10):
+        """
+        Get the most important features for churn prediction.
+        
+        Args:
+            top_n: Number of top features to return
+            
+        Returns:
+            pd.DataFrame: Feature importance ranking
+        """
+        if not self.is_trained:
+            raise ValueError("Model must be trained first")
+        
+        importance = self.model.feature_importances_
+        feature_imp = pd.DataFrame({
+            'feature': self.feature_names,
+            'importance': importance
+        }).sort_values('importance', ascending=False)
+        
+        return feature_imp.head(top_n)
+    
+    def evaluate(self, X, y_true):
+        """
+        Evaluate model performance with multiple metrics.
+        
+        Args:
+            X: Feature DataFrame or array
+            y_true: True binary labels
+            
+        Returns:
+            dict: Dictionary with accuracy, precision, recall, f1, and roc_auc
+        """
+        from sklearn.metrics import (
+            accuracy_score, precision_score, recall_score, 
+            f1_score, roc_auc_score, confusion_matrix
+        )
+        
+        y_pred = self.predict(X)
+        y_proba = self.predict_proba(X)[:, 1]
+        
+        return {
+            'accuracy': accuracy_score(y_true, y_pred),
+            'precision': precision_score(y_true, y_pred, zero_division=0),
+            'recall': recall_score(y_true, y_pred, zero_division=0),
+            'f1_score': f1_score(y_true, y_pred, zero_division=0),
+            'roc_auc': roc_auc_score(y_true, y_proba),
+            'confusion_matrix': confusion_matrix(y_true, y_pred).tolist()
+        }
+
